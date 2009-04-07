@@ -144,3 +144,35 @@ void release_event(Event *elem)
                                     bottom of the Free List */
  insert_event(&free_events,elem);
 }
+
+void delete_event(Event **last,Event *elem)
+{
+
+  if (elem==NULL) return;
+  if ((*last)==NULL) return;
+
+  if ((*last)->next==(*last))
+   {
+     /* There is a single event in the FES */
+     if ((*last)==elem)
+      {
+        (*last)=NULL;
+      }
+   }
+  else
+   {
+     (elem->next)->prev = elem->prev;
+     (elem->prev)->next = elem->next;
+     if ((*last)==elem)
+      {
+         /* elem was the last event in the FES: update the FES reference */
+        (*last) = elem->prev;
+      }
+   }
+
+  /* Detach the record from the FES */
+  elem->next = NULL;
+  elem->prev = NULL;
+  
+  return;
+}
