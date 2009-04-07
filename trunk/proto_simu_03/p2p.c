@@ -40,8 +40,6 @@ typedef enum {FALSE, TRUE} boolean;
 
 long seme1 = 14123451;
 Event *event_list = NULL;
-//Record *queue=NULL;
-//Record *in_service=NULL;
 int num_content[NumPeers]; // Counter for the peer memory
 boolean memory [NumPeers][MaxID]; // Structure for the peer memory
 Record * cache[NumPeers]; // Structure for the announcement cache
@@ -193,9 +191,6 @@ void generation(int peer){
 	total_area[peer] += 1.0 * old_sample[peer] * delta_time;
 	old_sample[peer] = num_content[peer];
 	last_time[peer] = current_time;
-	if (peer==0) {
-	 //printf("delta_time: %f old_sample: %d current: %f \n", delta_time, old_sample[peer], current_time);
-	}
 	
 	
 	
@@ -256,10 +251,15 @@ void local_search(int peer) {
 		completed_search++;
 		good_search++;
 		//Start download
-		good_download++;
-		Parameters* par = (Parameters*) malloc(sizeof(Parameters));
-		par->content_ID = wanted_ID;
-		schedule(END_DOWNLOAD, current_time + negexp(DownloadTime, &seme1), peer, par);
+		if ( memory[rec->gen_peer][wanted_ID] ) {
+			good_download++;
+			Parameters* par = (Parameters*) malloc(sizeof(Parameters));
+			par->content_ID = wanted_ID;
+			schedule(END_DOWNLOAD, current_time + negexp(DownloadTime, &seme1), peer, par);
+		} else {
+			bad_download++;
+			schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), peer, NULL);
+		}
 		return;
 	}
 	
@@ -276,14 +276,15 @@ void local_search(int peer) {
 	Random_Peers rnd;
 	rnd.peer = peer;
 	rnd.next = NULL;
+	Parameters* par[NumSearch];
 	for (i=0; i<=NumSearch; i++) {
 		//Generate a new search
-		Parameters* par = (Parameters*) malloc(sizeof(Parameters));
-		par->gen_search = peer;
-		par->prev_search = peer;
-		par->search_ID = search->key;
-		par->content_ID = wanted_ID;
-		par->num_relay = MaxRelay;
+		par[i] = (Parameters*) malloc(sizeof(Parameters));
+		par[i]->gen_search = peer;
+		par[i]->prev_search = peer;
+		par[i]->search_ID = search->key;
+		par[i]->content_ID = wanted_ID;
+		par[i]->num_relay = MaxRelay;
 		//Take a random peer
 		do {
 			next_peer = floor(uniform(0, NumPeers, &seme1));
@@ -291,7 +292,7 @@ void local_search(int peer) {
 		} while ( is_present(next_peer, &rnd) );
 		
 		double contact_time = uniform(MinContactTime, MaxContactTime, &seme1);
-		schedule(RELAY_SEARCH, current_time + contact_time, next_peer, par);
+		schedule(RELAY_SEARCH, current_time + contact_time, next_peer, par[i]);
 		//printf("Relay to %d\n", next_peer);
 	}
 	
@@ -305,14 +306,15 @@ void local_search(int peer) {
 
 
 void relay_search(int peer, Parameters* par) {
-	//printf("Searching %d at relay %d from %d hop count %d\n", par->content_ID, peer, par->gen_search, par->num_relay);
+	printf("Searching %d at relay %d from %d hop count %d\n", par->content_ID, peer, par->gen_search, par->num_relay);
 	
 	//Do I have it?
 	if ( memory[peer][par->content_ID] ) {
 		printf("%d has %d\n", peer, par->content_ID);
 		//Tell to who started the search
 		par->gen_peer = peer;
-		schedule(END_SEARCH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), par->gen_search, par); 
+		schedule(END_SEARCH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), par->gen_search, par);
+		return; 
 	}
 	
 	//Is it in the cache?
@@ -320,21 +322,23 @@ void relay_search(int peer, Parameters* par) {
 	if ( rec != NULL ) {
 		//Tell him
 		par->gen_peer = rec->gen_peer;
-		printf("%d cached %d owned by %d\n", peer, par->content_ID, par->gen_peer);
+		
+		//printf("%d cached %d owned by %d\n", peer, par->content_ID, par->gen_peer);
 		schedule(END_SEARCH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), par->gen_search, par);
+		
 		return;
 	}
-	
+	printf("Searching %d at relay %d from %d hop count %d\n", par->content_ID, peer, par->gen_search, par->num_relay);
 	//Keep relaying
 	if ( par->num_relay > 0 ) {
 		int i=0, next_peer;
 		Random_Peers* rnd = (Random_Peers*)malloc(sizeof(Random_Peers));
+		rnd->peer = peer;
+		rnd->next = NULL;
 		//Exclude who generated the search
-		is_present(par->gen_peer, rnd);
+		is_present(par->gen_search, rnd);
 		//exclude who sent the search
 		is_present(par->prev_search, rnd);
-		//and exclude me
-		is_present(peer, rnd);
 		//Update this search
 		par->prev_search = peer;
 		par->num_relay--;
@@ -346,7 +350,6 @@ void relay_search(int peer, Parameters* par) {
 			} while ( is_present(next_peer, rnd) );
 			
 			schedule(RELAY_SEARCH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), next_peer, par);
-			//printf("Relay from %d to %d\n", peer, next_peer);
 		}
 	}
 }
@@ -374,6 +377,7 @@ void timeout_search(int peer, Parameters* par ) {
 void end_search(int peer, Parameters* par) {
 	Record* rec = search_record(&searches, par->search_ID);
 	if ( rec == NULL ) {
+		printf("Banana \n");
 		//This search is not pending, either is completed or timedout
 		return;
 	}
@@ -407,7 +411,7 @@ void results(void)
  printf("Theoretical delay %f\n",1.0/(mu-lambda));
  printf("Average number of users     %f\n",cumulative_time_user/current_time);
   */
- printf("Terminato!!!!");
+ printf("Terminato!!!!\n");
  int i;
  for (i = 0 ; i<NumPeers; i++) {
  	int delta_time = current_time - last_time[i];
@@ -431,6 +435,8 @@ int main()
 	total_search=0;
 	good_search=0;
 	completed_search=0;
+	good_download=0;
+	bad_download=0;
   
 	// Variables initialization
 	for (i=0 ; i<NumPeers ; i++){
@@ -453,18 +459,18 @@ int main()
 	
 	/* Schedule the first GENERATION and SEARCH for all the peers in the system */
 	for (i=0; i<NumPeers; i++){
-		schedule(GENERATION , negexp(1.0/ContentRate, &seme1) , i , NULL);
-		//schedule(LOCAL_SEARCH, current_time, i, NULL);
+		schedule(GENERATION , negexp(1.0/ContentRate, &seme1), i, NULL);
+		schedule(LOCAL_SEARCH, negexp(SearchInterval, &seme1), i, NULL);
 	}
-	schedule(LOCAL_SEARCH, current_time+negexp(SearchInterval, &seme1), 0, NULL);
 	
 	while (current_time<maximum)
 	{
 		ev = get_event(&event_list);
 		last_event_time = current_time;
-		current_time = ev->time;
-    
 		//printf("Evento: %d, tempo: %f\n", ev->type, current_time);
+		current_time = ev->time;
+		
+		
 		switch (ev->type)
 		{
 			case GENERATION:  generation(ev->peer);
@@ -473,8 +479,6 @@ int main()
 				free(ev->pointer);
 				break;
 			case PUBLISH: publish((Parameters*)ev->pointer, ev->peer);
-				//Parameters* par_debug = (Parameters*)ev->pointer;
-				//printf("gen_peer: %d ID: %d peer: %d \n", par_debug->gen_peer, par_debug->key, ev->peer);	
 				break;
 			case LOCAL_SEARCH: local_search(ev->peer);
 				break;
@@ -487,7 +491,7 @@ int main()
 			case END_DOWNLOAD: end_of_download(ev->peer, (Parameters*)ev->pointer );
 				break;
 			default: printf("[%d] The Horror! The Horror!\n", ev->type);
-		      //exit(1);
+		      exit(1);
      }
     release_event(ev);
   }
