@@ -9,16 +9,18 @@
 
 #define MaxID 10000
 #define ContentRate 1
-#define MinLife 10
-#define MaxLife 30
+#define MinLife 40
+#define MaxLife 60
 #define CacheSize 20
 #define NumPeers 30
 #define NumPublish 10
 #define NumSearch 2
 #define SearchTimeOut 15
 #define MaxRelay 4
-#define MinContactTime 0.1
-#define MaxContactTime 0.5
+#define MinContactTime 0.1 /* secs */
+#define MaxContactTime 0.5 /* secs */
+#define SearchInterval 2  /* avg search interval, secs */
+#define DownloadTime 5
 
 typedef struct parameters_set Parameters;
 
@@ -30,7 +32,7 @@ struct parameters_set
     int prev_search; /* Who sent me the search */
     int search_ID; /* Global ID of the search */
     int content_ID; /* ID of the content (generated or searched) */
-    int num_relay; /* Number of relays I already did */
+    int num_relay; /* Number of relays I can do, 0 stop relaying */
   };
 
 enum {GENERATION, REMOVAL, PUBLISH, LOCAL_SEARCH, RELAY_SEARCH, END_SEARCH, TIMEOUT_SEARCH, END_DOWNLOAD};
@@ -44,6 +46,7 @@ int num_content[NumPeers]; // Counter for the peer memory
 boolean memory [NumPeers][MaxID]; // Structure for the peer memory
 Record * cache[NumPeers]; // Structure for the announcement cache
 int cache_counter[NumPeers]; // Counter for the announcement cache
+Record *searches; //Structure for the search objects
 
 //double lambda,mu;
 int total_users;
@@ -52,6 +55,7 @@ Time total_delay,last_event_time;
 int number_of_samples;
 Time current_time;
 int last_search, total_search, good_search, completed_search;
+int good_download, bad_download;
 
 // Statistical variables
 double avg_memory[NumPeers]; // In order to evaluate avg memory occupation
@@ -94,8 +98,6 @@ boolean is_present (int peer, Random_Peers* list) {
 	list = new;
 	return FALSE;
 }
-
-
 
 /*
 **  Function : void get_input(char *format,void *variable)
@@ -217,17 +219,32 @@ void local_search(int peer) {
 	
 	//Do I have it ?
 	if ( memory[peer][wanted_ID] ) {
-		printf("I have it\n");
+		completed_search++;
+		good_search++;
 		return;
 	}
 	
 	//Is it in the cache?
 	Record *rec = search_record( &cache[peer], wanted_ID);
 	if ( rec != NULL ) {
+		//Good search
+		completed_search++;
+		good_search++;
 		//Start download
-		printf("Start download\n");
+		good_download++;
+		Parameters* par = (Parameters*) malloc(sizeof(Parameters));
+		par->content_ID = wanted_ID;
+		schedule(END_DOWNLOAD, current_time + negexp(DownloadTime, &seme1), peer, par);
 		return;
 	}
+	
+	//Generate a search record
+	Record* search = new_record();
+	search->key = last_search++;
+	search->arrival = current_time;
+	search->gen_peer = peer;
+	// Store the pending search
+	in_list(&searches, search);
 	
 	//Relay the search
 	int i=0, next_peer;
@@ -239,9 +256,9 @@ void local_search(int peer) {
 		Parameters* par = (Parameters*) malloc(sizeof(Parameters));
 		par->gen_search = peer;
 		par->prev_search = peer;
-		par->search_ID = last_search++;
+		par->search_ID = search->key;
 		par->content_ID = wanted_ID;
-		par->num_relay = 0;
+		par->num_relay = MaxRelay;
 		//Take a random peer
 		do {
 			next_peer = floor(uniform(0, NumPeers, &seme1));
@@ -253,7 +270,9 @@ void local_search(int peer) {
 	}
 	
 	//Set timeout
-	schedule(TIMEOUT_SEARCH, current_time + SearchTimeOut, peer, NULL);
+	Parameters* search_par = (Parameters*) malloc(sizeof(Parameters));
+	search_par->search_ID = search->key;
+	schedule(TIMEOUT_SEARCH, current_time + SearchTimeOut, peer, search_par);
 	
 	return;
 }
@@ -281,7 +300,7 @@ void relay_search(int peer, Parameters* par) {
 	}
 	
 	//Keep relaying
-	if ( par->num_relay < MaxRelay ) {
+	if ( par->num_relay > 0 ) {
 		int i=0, next_peer;
 		Random_Peers* rnd = (Random_Peers*)malloc(sizeof(Random_Peers));
 		//Exclude who generated the search
@@ -292,8 +311,7 @@ void relay_search(int peer, Parameters* par) {
 		is_present(peer, rnd);
 		//Update this search
 		par->prev_search = peer;
-		par->num_relay++;
-		printf("The Horror!");
+		par->num_relay--;
 		
 		for (i=0; i<NumSearch; i++) {
 			//Take a random peer
@@ -308,6 +326,19 @@ void relay_search(int peer, Parameters* par) {
 }
 
 
+void timeout_search(int peer, Parameters* par ) {
+	Record* search = search_record(&searches, par->search_ID);
+	if (search==NULL) printf("The Horror!\n");
+	completed_search++;
+	
+	//Remove the record
+	remove_record(&searches, search);
+	
+	//Schedule next search
+	schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), peer, NULL);
+	
+	return; 
+}
 
 void results(void)
 {
@@ -390,6 +421,8 @@ int main()
 			case LOCAL_SEARCH: local_search(ev->peer);
 				break;
 			case RELAY_SEARCH: relay_search(ev->peer, (Parameters*)ev->pointer );
+				break;
+			case TIMEOUT_SEARCH: timeout_search(ev->peer, (Parameters*)ev->pointer );
 				break;
 			default: printf("[%d] The Horror! The Horror!\n", ev->type);
 		      //exit(1);
