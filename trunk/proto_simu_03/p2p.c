@@ -21,6 +21,10 @@
 #define MaxContactTime 0.5 /* secs */
 #define SearchInterval 2  /* avg search interval, secs */
 #define DownloadTime 5
+#define NumSearch 2
+#define SearchTimeOut 15
+#define MaxRelay 4
+
 
 typedef struct parameters_set Parameters;
 
@@ -33,6 +37,7 @@ struct parameters_set
     int search_ID; /* Global ID of the search */
     int content_ID; /* ID of the content (generated or searched) */
     int num_relay; /* Number of relays I can do, 0 stop relaying */
+    int search_result;
   };
 
 enum {GENERATION, REMOVAL, PUBLISH, LOCAL_SEARCH, RELAY_SEARCH, END_SEARCH, TIMEOUT_SEARCH, END_DOWNLOAD};
@@ -46,7 +51,9 @@ int num_content[NumPeers]; // Counter for the peer memory
 boolean memory [NumPeers][MaxID]; // Structure for the peer memory
 Record * cache[NumPeers]; // Structure for the announcement cache
 int cache_counter[NumPeers]; // Counter for the announcement cache
+
 Record *searches; //Structure for the search objects
+
 
 //double lambda,mu;
 int total_users;
@@ -122,7 +129,41 @@ void get_input(char *format,void *variable)
 					/* input line.			    */
 }
 
+/* Procedure to publish content to other peers
+ * The parameters are the ID to publish and the peer generating the publishment */
 
+void publish_procedure(int ID, int peer){
+	 Parameters * rec = (Parameters*) malloc (sizeof(Parameters));
+	 rec->key = ID;
+	 rec->gen_peer = peer;
+	 Random_Peers * list = (Random_Peers*) malloc (sizeof(Random_Peers));
+	 list->peer = peer;
+	 list->next= NULL;
+	 int i, rnd_peer;
+	 boolean present;
+	 for (i=0 ; i<NumPublish; i++){
+	  	  present = TRUE;
+	  	  while (present){
+	  	     rnd_peer = floor(uniform(0,NumPeers,&seme1));
+	  	     present = is_present(rnd_peer, list); 
+	  	  }
+	  	schedule(PUBLISH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), rnd_peer, rec);
+	  }
+}
+
+void end_of_download(int peer, Parameters * par){
+	// Update the statistics
+	printf("Download ID: %d, from peer: %d \n", par->content_ID, peer);
+	// Check if already in memory (i.e. generation during download time)
+	if (!memory[peer][par->content_ID]){ // if present do nothing
+		memory[peer][par->content_ID] = TRUE; // Save in the local memory
+		// Publish procedure
+		publish_procedure(par->content_ID, peer);
+		// Schedule new search
+		schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1) , peer, NULL);
+		
+	}
+}
 
 void generation(int peer){
 	
@@ -146,7 +187,8 @@ void generation(int peer){
 	  schedule(REMOVAL, current_time + uniform(MinLife, MaxLife, &seme1), peer, par);
 	  
 	  // Publish content to other peers
-	  
+	  publish_procedure(ID, peer);
+	   /*
 	  Parameters * rec = (Parameters*) malloc (sizeof(Parameters));
 	  rec->key = ID;
 	  rec->gen_peer = peer;
@@ -162,7 +204,7 @@ void generation(int peer){
 	  	     present = is_present(rnd_peer, list); 
 	  	  }
 	  	schedule(PUBLISH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), rnd_peer, rec);
-	  }
+	  }*/
 	  // Statistical evaluation: avg number of contents in the queue
 	  
 	    
@@ -211,11 +253,12 @@ void publish(Parameters *par, int peer){
 	
 }
 
+
 void local_search(int peer) {
 	total_search++;
 	//What am I looking for ?
 	int wanted_ID = uniform(0, MaxID, &seme1);
-	printf("Searching %d\n", wanted_ID);
+	//printf("Searching %d\n", wanted_ID);
 	
 	//Do I have it ?
 	if ( memory[peer][wanted_ID] ) {
@@ -266,7 +309,7 @@ void local_search(int peer) {
 		
 		double contact_time = uniform(MinContactTime, MaxContactTime, &seme1);
 		schedule(RELAY_SEARCH, current_time + contact_time, next_peer, par);
-		printf("Relay to %d\n", next_peer);
+		//printf("Relay to %d\n", next_peer);
 	}
 	
 	//Set timeout
@@ -275,11 +318,12 @@ void local_search(int peer) {
 	schedule(TIMEOUT_SEARCH, current_time + SearchTimeOut, peer, search_par);
 	
 	return;
+
 }
 
 
 void relay_search(int peer, Parameters* par) {
-	printf("Searching %d at relay %d from %d hop count %d\n", par->content_ID, peer, par->gen_search, par->num_relay);
+	//printf("Searching %d at relay %d from %d hop count %d\n", par->content_ID, peer, par->gen_search, par->num_relay);
 	
 	//Do I have it?
 	if ( memory[peer][par->content_ID] ) {
@@ -320,7 +364,7 @@ void relay_search(int peer, Parameters* par) {
 			} while ( is_present(next_peer, rnd) );
 			
 			schedule(RELAY_SEARCH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), next_peer, par);
-			printf("Relay from %d to %d\n", peer, next_peer);
+			//printf("Relay from %d to %d\n", peer, next_peer);
 		}
 	}
 }
@@ -406,6 +450,7 @@ int main()
 		last_event_time = current_time;
 		current_time = ev->time;
     
+
 		//printf("Evento: %d, tempo: %f\n", ev->type, current_time);
 		switch (ev->type)
 		{
@@ -424,8 +469,11 @@ int main()
 				break;
 			case TIMEOUT_SEARCH: timeout_search(ev->peer, (Parameters*)ev->pointer );
 				break;
+			case END_DOWNLOAD: end_of_download(ev->peer, (Parameters*)ev->pointer );
+				break;
 			default: printf("[%d] The Horror! The Horror!\n", ev->type);
 		      //exit(1);
+
      }
     release_event(ev);
   }
