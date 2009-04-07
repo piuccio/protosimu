@@ -51,7 +51,7 @@ double cumulative_time_user;
 Time total_delay,last_event_time;
 int number_of_samples;
 Time current_time;
-int last_search;
+int last_search, total_search, good_search, completed_search;
 
 // Statistical variables
 double avg_memory[NumPeers]; // In order to evaluate avg memory occupation
@@ -210,6 +210,7 @@ void publish(Parameters *par, int peer){
 }
 
 void local_search(int peer) {
+	total_search++;
 	//What am I looking for ?
 	int wanted_ID = uniform(0, MaxID, &seme1);
 	printf("Searching %d\n", wanted_ID);
@@ -338,10 +339,10 @@ int main()
 	Time maximum;
 	int i,j;
 
-// cumulative_time_user =0.0;
-// total_delay=0.0;
-// last_event_time=0.0;
-// number_of_samples=0.0;
+	last_search=0;
+	total_search=0;
+	good_search=0;
+	completed_search=0;
   
 	// Variables initialization
 	for (i=0 ; i<NumPeers ; i++){
