@@ -7,13 +7,13 @@
 #include "math.h"
 
 
-#define MaxID 10000
+#define MaxID 1000
 #define ContentRate 1
 #define MinLife 40
 #define MaxLife 60
 #define CacheSize 20
 #define NumPeers 30
-#define NumPublish 10
+#define NumPublish 5
 #define NumSearch 2
 #define SearchTimeOut 15
 #define MaxRelay 4
@@ -87,16 +87,18 @@ typedef struct Random_Peers {
 
 boolean is_present (int peer, Random_Peers* list) {
 	Random_Peers* l = list;
+	Random_Peers* last;
 	while (l != NULL) {
 		if (l->peer == peer) {
 			return TRUE;
 		}
+		if ( l->next == NULL) last = l;
 		l = l->next;
 	}
 	Random_Peers* new = (Random_Peers*) malloc(sizeof(Random_Peers));
 	new->peer = peer;
-	new->next = list;
-	list = new;
+	new->next = NULL;
+	last->next = new;
 	return FALSE;
 }
 
@@ -153,10 +155,10 @@ void end_of_download(int peer, Parameters * par){
 		memory[peer][par->content_ID] = TRUE; // Save in the local memory
 		// Publish procedure
 		publish_procedure(par->content_ID, peer);
-		// Schedule new search
-		schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1) , peer, NULL);
-		
 	}
+	
+	// Schedule new search
+	schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1) , peer, NULL);
 }
 
 void generation(int peer){
@@ -182,23 +184,7 @@ void generation(int peer){
 	  
 	  // Publish content to other peers
 	  publish_procedure(ID, peer);
-	   /*
-	  Parameters * rec = (Parameters*) malloc (sizeof(Parameters));
-	  rec->key = ID;
-	  rec->gen_peer = peer;
-	  Random_Peers * list = (Random_Peers*) malloc (sizeof(Random_Peers));
-	  list->peer = peer;
-	  list->next= NULL;
-	  int i, rnd_peer;
-	  boolean present;
-	  for (i=0 ; i<NumPublish; i++){
-	  	  present = TRUE;
-	  	  while (present){
-	  	     rnd_peer = floor(uniform(0,NumPeers,&seme1));
-	  	     present = is_present(rnd_peer, list); 
-	  	  }
-	  	schedule(PUBLISH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), rnd_peer, rec);
-	  }*/
+	  
 	  // Statistical evaluation: avg number of contents in the queue
 	  
 	    
@@ -252,12 +238,14 @@ void local_search(int peer) {
 	total_search++;
 	//What am I looking for ?
 	int wanted_ID = uniform(0, MaxID, &seme1);
-	//printf("Searching %d\n", wanted_ID);
+	printf("[%f] Searching %d\n", current_time, wanted_ID);
 	
 	//Do I have it ?
 	if ( memory[peer][wanted_ID] ) {
 		completed_search++;
 		good_search++;
+		
+		schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), peer, NULL);
 		return;
 	}
 	
@@ -288,7 +276,7 @@ void local_search(int peer) {
 	Random_Peers rnd;
 	rnd.peer = peer;
 	rnd.next = NULL;
-	for (i=0; i<NumSearch; i++) {
+	for (i=0; i<=NumSearch; i++) {
 		//Generate a new search
 		Parameters* par = (Parameters*) malloc(sizeof(Parameters));
 		par->gen_search = peer;
@@ -299,6 +287,7 @@ void local_search(int peer) {
 		//Take a random peer
 		do {
 			next_peer = floor(uniform(0, NumPeers, &seme1));
+			printf(".%d ", next_peer);
 		} while ( is_present(next_peer, &rnd) );
 		
 		double contact_time = uniform(MinContactTime, MaxContactTime, &seme1);
@@ -320,7 +309,7 @@ void relay_search(int peer, Parameters* par) {
 	
 	//Do I have it?
 	if ( memory[peer][par->content_ID] ) {
-		printf("%d has %d", peer, par->content_ID);
+		printf("%d has %d\n", peer, par->content_ID);
 		//Tell to who started the search
 		par->gen_peer = peer;
 		schedule(END_SEARCH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), par->gen_search, par); 
@@ -364,13 +353,15 @@ void relay_search(int peer, Parameters* par) {
 
 
 void timeout_search(int peer, Parameters* par ) {
+	printf("[%f] Timeout expired", current_time);
 	Record* search = search_record(&searches, par->search_ID);
 	if (search==NULL) {
+		printf(" do nothing\n");
 		//I already replyed to this search
 		return;
 	}
 	completed_search++;
-	
+	printf(" schedule new\n");
 	//Remove the record
 	remove_record(&searches, search);
 	
@@ -396,7 +387,10 @@ void end_search(int peer, Parameters* par) {
 		//Start the download
 		schedule(END_DOWNLOAD, current_time + negexp(DownloadTime, &seme1), peer, par);
 	} else {
+		//Search failed
 		completed_search++;
+		//schedule a new one
+		schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), peer, NULL);
 	}
 	
 	//Remove this search from the pending
@@ -460,8 +454,9 @@ int main()
 	/* Schedule the first GENERATION and SEARCH for all the peers in the system */
 	for (i=0; i<NumPeers; i++){
 		schedule(GENERATION , negexp(1.0/ContentRate, &seme1) , i , NULL);
-		schedule(LOCAL_SEARCH, current_time, 0, NULL);
+		//schedule(LOCAL_SEARCH, current_time, i, NULL);
 	}
+	schedule(LOCAL_SEARCH, current_time+negexp(SearchInterval, &seme1), 0, NULL);
 	
 	while (current_time<maximum)
 	{
