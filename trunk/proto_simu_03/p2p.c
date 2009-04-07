@@ -21,10 +21,6 @@
 #define MaxContactTime 0.5 /* secs */
 #define SearchInterval 2  /* avg search interval, secs */
 #define DownloadTime 5
-#define NumSearch 2
-#define SearchTimeOut 15
-#define MaxRelay 4
-
 
 typedef struct parameters_set Parameters;
 
@@ -37,7 +33,6 @@ struct parameters_set
     int search_ID; /* Global ID of the search */
     int content_ID; /* ID of the content (generated or searched) */
     int num_relay; /* Number of relays I can do, 0 stop relaying */
-    int search_result;
   };
 
 enum {GENERATION, REMOVAL, PUBLISH, LOCAL_SEARCH, RELAY_SEARCH, END_SEARCH, TIMEOUT_SEARCH, END_DOWNLOAD};
@@ -53,7 +48,6 @@ Record * cache[NumPeers]; // Structure for the announcement cache
 int cache_counter[NumPeers]; // Counter for the announcement cache
 
 Record *searches; //Structure for the search objects
-
 
 //double lambda,mu;
 int total_users;
@@ -318,7 +312,6 @@ void local_search(int peer) {
 	schedule(TIMEOUT_SEARCH, current_time + SearchTimeOut, peer, search_par);
 	
 	return;
-
 }
 
 
@@ -372,7 +365,10 @@ void relay_search(int peer, Parameters* par) {
 
 void timeout_search(int peer, Parameters* par ) {
 	Record* search = search_record(&searches, par->search_ID);
-	if (search==NULL) printf("The Horror!\n");
+	if (search==NULL) {
+		//I already replyed to this search
+		return;
+	}
 	completed_search++;
 	
 	//Remove the record
@@ -382,6 +378,29 @@ void timeout_search(int peer, Parameters* par ) {
 	schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), peer, NULL);
 	
 	return; 
+}
+
+void end_search(int peer, Parameters* par) {
+	Record* rec = search_record(&searches, par->search_ID);
+	if ( rec == NULL ) {
+		//This search is not pending, either is completed or timedout
+		return;
+	}
+	
+	//Is the content still there
+	if ( memory[par->gen_peer][par->content_ID] ) {
+		//Update stats
+		completed_search++;
+		good_search++;
+		
+		//Start the download
+		schedule(END_DOWNLOAD, current_time + negexp(DownloadTime, &seme1), peer, par);
+	} else {
+		completed_search++;
+	}
+	
+	//Remove this search from the pending
+	remove_record(&searches, rec);
 }
 
 void results(void)
@@ -450,7 +469,6 @@ int main()
 		last_event_time = current_time;
 		current_time = ev->time;
     
-
 		//printf("Evento: %d, tempo: %f\n", ev->type, current_time);
 		switch (ev->type)
 		{
@@ -469,11 +487,12 @@ int main()
 				break;
 			case TIMEOUT_SEARCH: timeout_search(ev->peer, (Parameters*)ev->pointer );
 				break;
+			case END_SEARCH: end_search(ev->peer, (Parameters*)ev->pointer );
+				break;
 			case END_DOWNLOAD: end_of_download(ev->peer, (Parameters*)ev->pointer );
 				break;
 			default: printf("[%d] The Horror! The Horror!\n", ev->type);
 		      //exit(1);
-
      }
     release_event(ev);
   }
