@@ -15,7 +15,7 @@
 #define NumPeers 30
 #define NumPublish 5
 #define NumSearch 2
-#define SearchTimeOut 15
+#define SearchTimeOut 10
 #define MaxRelay 4
 #define MinContactTime 0.1 /* secs */
 #define MaxContactTime 0.5 /* secs */
@@ -63,13 +63,20 @@ int completed_down;
 //avg time to complete a search phase
 Time total_search_time;
 //probability that a content is not in the system
-//???
+//when I start the search?
+int search_should_succeed, started_search;
 // MINE: average memory occupancy
 double area_memory[NumPeers];
 
 
 Time current_time;
 
+//Different exit policy
+double DownloadRate = 0.0;
+double avgLife = 0.0;
+double avgContent = 0.0;
+double transient = 0.0;
+	
 
 extern double negexp(double,long *);
 extern double uniform(double , double , long *);
@@ -164,6 +171,7 @@ void end_of_download(int peer, Parameters * par){
 	if (!memory[peer][par->content_ID]){ // if present do nothing
 		// Save in the local memory
 		memory[peer][par->content_ID] = TRUE;
+		global_memory[par->content_ID] = TRUE;
 		//Update memory distribution
 		histo_content[num_content[peer]] += current_time - last_memory_update[peer];
 		//and memory occupancy
@@ -263,6 +271,12 @@ void local_search(int peer) {
 	int wanted_ID = uniform(0, MaxID, &seme1);
 	//printf("[%f] Searching %d\n", current_time, wanted_ID);
 	
+	//Should the search succeed ?
+	started_search++;
+	if ( global_memory[wanted_ID] == TRUE ) {
+		search_should_succeed++;
+	}
+	 
 	//Do I have it ?
 	if ( memory[peer][wanted_ID] ) {
 		//Search successful, a new search can start
@@ -454,8 +468,12 @@ void results(void)
 	//How many downloads each peer has in one second
 	printf("Avg number of content in memory: %f\n", total / NumPeers );
 	double DownloadRate = (double)completed_down/current_time/NumPeers;
-	printf("\tTheoretical including download rate %f\n",(MinLife+MaxLife)/2.0*(ContentRate+DownloadRate));
-	printf("\tTransient period %f\n",(MinLife+MaxLife)/2.0*(ContentRate+DownloadRate)/2.0/current_time);
+	double avgLife = (MinLife+MaxLife)/2.0;
+	double avgContent = avgLife*(ContentRate+DownloadRate);
+	printf("\tAvg download rate: %f\n", DownloadRate );
+	printf("\tTheoretical including download rate %f\n",avgContent);
+	double transient = avgContent*(avgLife/2.0+1.0/ContentRate)/current_time;
+	printf("\tTransient period %f (%.2f%%)\n",transient, transient/avgContent*100.0);
 	
 printf("Prob. search fails %f%%\n", (double)failed_search/total_search*100.0);
 	printf("\tTheoretical : %f\n",0.0);
@@ -473,7 +491,7 @@ printf("Avg copies of the same content: %f\n", (double)generated_content/unique_
 printf("Avg downloads in the time unit: %f\n", (double)completed_down/current_time);
 printf("Avg time to complete a search: %f\n", total_search_time/total_search);
 printf("Avg time to complete a relayed search: %f \n", total_search_time/relayed_search);
-printf("Prob. that a content is not in the system: ???\n");
+printf("Prob. that a content is not in the system (when I start the search): %f%%\n", 100.0*(1.0-(double)search_should_succeed/started_search));
 
 
 	exit(0);
@@ -497,6 +515,8 @@ int main()
 	completed_down=0;
 	total_search_time=0;
 	next_search=0;
+	search_should_succeed=0;
+	started_search=0;
 	
 	current_time = 0.0;
 	
@@ -519,10 +539,14 @@ int main()
  
 	//printf("Insert the maximum simulation time: ");
 	//get_input("%lf",&maximum);
-	maximum=2000.0;
-	printf("Max Time  = %f\n",maximum);
+	maximum=300.0;
+	//printf("Max Time  = %f\n",maximum);
 	
-	
+	//Different exit strategy
+	do {
+		printf("Starting a batch at time %f\n", current_time);
+		maximum += 200.0;
+		
 	while (current_time<maximum)
 	{
 		ev = get_event(&event_list);
@@ -554,6 +578,15 @@ int main()
 		release_event(ev);
 	}
 	
+	//Different exit strategy
+	DownloadRate = (double)completed_down/current_time/NumPeers;
+	avgLife = (MinLife+MaxLife)/2.0;
+	avgContent = avgLife*(ContentRate+DownloadRate);
+	transient = avgContent*(avgLife/2.0+1.0/ContentRate)/current_time;
+	printf("Warm-up effect: %f%%\n", transient/avgContent*100.0);
+	} while (transient/avgContent*100.0 > 1);
+	
+	printf("Simulation time: %f\n\n", current_time);
 	results();
 return 0;
 }
