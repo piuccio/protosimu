@@ -12,7 +12,7 @@
 #define MinLife 40
 #define MaxLife 60
 #define CacheSize 50
-#define NumPeers 100
+#define NumPeers 10
 #define NumPublish 2
 #define NumSearch 2
 #define SearchTimeOut 10
@@ -270,7 +270,7 @@ void removal(Parameters* par, int peer){
 	}
 	global_memory[par->content_ID]--;
 	
-	//free(par);
+	free(par);
 	return;
 }
 
@@ -482,11 +482,11 @@ void end_search(int peer, Parameters* par) {
 		failed_down++;
 		//schedule a new one
 		schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), peer, NULL);
+		free(par);
 	}
 	
 	//Remove this search from the pending list
 	remove_record(&searches, rec);
-	free(par);
 }
 
 void results(void)
@@ -529,16 +529,15 @@ printf("Avg time to complete a search: %f\n", total_search_time/total_search);
 printf("Avg time to complete a relayed search: %f \n", total_search_time/relayed_search);
 printf("Prob. that a content is not in the system (when I start the search): %f%%\n", 100.0*(1.0-(double)search_should_succeed/started_search));
 
-
-	exit(0);
 }
+
 
 int main()
 {
 	Event *ev;
 	Time maximum;
 	int i,j;
-
+	
 	failed_search=0;
 	total_search=0;
 	failed_down=0;
@@ -575,12 +574,7 @@ int main()
 		schedule(LOCAL_SEARCH, negexp(SearchInterval, &seme1), i, NULL);
 	}
 
-	
- 
-	//printf("Insert the maximum simulation time: ");
-	//get_input("%lf",&maximum);
 	maximum=200.0;
-	//printf("Max Time  = %f\n",maximum);
 	
 	//Different exit strategy
 	do {
@@ -589,7 +583,6 @@ int main()
 	while (current_time<maximum)
 	{
 		ev = get_event(&event_list);
-		//last_event_time = current_time;
 		current_time = ev->time;
 		//printf("[%f] Evento: %d, Peer: %d\n", current_time, ev->type, ev->peer);
 		
@@ -627,5 +620,6 @@ int main()
 	
 	printf("Simulation time: %f\n\n", current_time);
 	results();
+	
 return 0;
 }
