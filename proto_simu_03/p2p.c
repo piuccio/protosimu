@@ -11,17 +11,17 @@
 #define ContentRate 1
 #define MinLife 40
 #define MaxLife 60
-#define CacheSize 50
-#define NumPeers 10
+#define CacheSize 30
+#define NumPeers 30
 #define NumPublish 2
-#define NumSearch 2
+#define NumSearch 3
 #define SearchTimeOut 10
-#define MaxRelay 1
-#define MinContactTime 0.1 /* secs */
-#define MaxContactTime 0.5 /* secs */
-#define SearchInterval 2  /* avg search interval, secs */
+#define MaxRelay 2
+#define MinContactTime 0.1
+#define MaxContactTime 0.5
+#define SearchInterval 3  /* avg search interval */
 #define DownloadTime 5
-#define WarmUpRatio 10
+#define WarmUpRatio 2
 
 typedef struct parameters_set Parameters;
 
@@ -58,7 +58,6 @@ int failed_down, total_down;
 Time histo_content[MaxID];  //Time spent with that number of contents
 Time last_memory_update[NumPeers];
 //avg copies of the same content in the system
-int generated_content, unique_content; //not over time
 double area_global_memory;  //time avg
 Time last_global_update;
 int total_copies, unique_copies;
@@ -67,10 +66,13 @@ int completed_down;
 //avg time to complete a search phase
 Time total_search_time;
 //probability that a content is not in the system
-//when I start the search?
-int search_should_succeed, started_search;
+Time time_no_content[MaxID];
+Time last_no_content[MaxID];
+
 // MINE: average memory occupancy
 double area_memory[NumPeers];
+//Prob content is not there when I start the search
+int search_should_succeed, started_search;
 
 
 Time current_time;
@@ -190,6 +192,7 @@ void end_of_download(int peer, Parameters * par){
 		if ( global_memory[par->content_ID] == 0 ) {
 			//I'm adding a unique content
 			unique_copies++;
+			time_no_content[par->content_ID] += current_time - last_no_content[par->content_ID];
 		}
 		global_memory[par->content_ID]++;
 		
@@ -232,10 +235,9 @@ void generation(int peer){
 		total_copies++;
 		if ( global_memory[ID] == 0 ) {
 			unique_copies++;
-			unique_content++;
+			time_no_content[ID] += current_time - last_no_content[ID];
 		}
 		global_memory[ID]++;
-		generated_content++;
 	  
 	  
 		// Evaluate the lifetime and schedule the removal of the inserted content
@@ -267,6 +269,7 @@ void removal(Parameters* par, int peer){
 	if ( global_memory[par->content_ID] == 1 ) {
 		//this is the last one
 		unique_copies--;
+		last_no_content[par->content_ID] = current_time;
 	}
 	global_memory[par->content_ID]--;
 	
@@ -496,8 +499,12 @@ void results(void)
  	for (i = 0 ; i<NumPeers; i++) {
  		area_memory[i] += num_content[i] * ( current_time - last_memory_update[i]);
  		histo_content[num_content[i]] += current_time - last_memory_update[i];
+ 		last_memory_update[i] = current_time;
 		//printf("Peer: %d, Avg occupation: %f area: %f current time: %f\n", i, area_memory[i] / current_time, area_memory[i], current_time);
 		total += area_memory[i] / current_time;
+	}
+	for (i=0; i<MaxID; i++) {
+		
 	}
 	area_global_memory += (double)total_copies/unique_copies * (current_time - last_global_update);
 	//How many downloads each peer has in one second
@@ -512,22 +519,30 @@ void results(void)
 	
 printf("Prob. search fails %f%%\n", (double)failed_search/total_search*100.0);
 	printf("\tTheoretical (only local search): %f%%\n", 100.0-(double)(avgContent+CacheSize)/MaxID*100.0);
+	printf("\tProb. content doesn't exist: %f%%\n", 100.0*(1.0-(double)search_should_succeed/started_search));
 printf("Prob. download fails %f%%\n", (double)failed_down/total_down*100.0);
 printf("Distribution of content in the local memory \n\t");
 
 total=0.0;
+double total_no_content=0.0;
 for (i=0; i<MaxID; i++) {
 	printf("%f ", histo_content[i]/current_time/NumPeers);
 	total+=histo_content[i]/current_time/NumPeers;
+	
+	//prob content is not in the system
+	if ( global_memory[i] == 0 ) {
+		time_no_content[i] += current_time - last_no_content[i];
+		last_no_content[i] = current_time;
+	}
+	total_no_content += time_no_content[i]/MaxID; 
 }
 printf("\n\tTotal : %f\n", total);
 
-printf("Avg copies of the same content (no time): %f\n", (double)generated_content/unique_content);
-printf("Avg copies of the same content (time avg): %f\n", (double)area_global_memory/current_time);
+printf("Avg copies of the same content: %f\n", (double)area_global_memory/current_time);
 printf("Avg downloads in the time unit: %f\n", (double)completed_down/current_time);
 printf("Avg time to complete a search: %f\n", total_search_time/total_search);
-printf("Avg time to complete a relayed search: %f \n", total_search_time/relayed_search);
-printf("Prob. that a content is not in the system (when I start the search): %f%%\n", 100.0*(1.0-(double)search_should_succeed/started_search));
+	printf("\tAvg time for a relayed search: %f \n", total_search_time/relayed_search);
+printf("Prob. that a content is not in the system: %f%%\n", 100.0*total_no_content/current_time);
 
 }
 
@@ -545,8 +560,6 @@ int main()
 	for (i=0; i<MaxID; i++) {
 		histo_content[i]=0;
 	}
-	generated_content=0;
-	unique_content=0;
 	completed_down=0;
 	total_search_time=0;
 	next_search=0;
@@ -566,11 +579,14 @@ int main()
 		cache_counter[i] = 0;
 		last_memory_update[i]=0.0;
 		global_memory[i]=0;
+		time_no_content[i]=0;
+		last_no_content[i]=0;
 		for (j=0 ; j<MaxID ; j++)
 			memory[i][j] = FALSE;
+		
 			
 		/* Schedule the first GENERATION and SEARCH for all the peers in the system */
-		schedule(GENERATION , negexp(1.0/ContentRate, &seme1), i, NULL);
+		schedule(GENERATION , 0.0, i, NULL);
 		schedule(LOCAL_SEARCH, negexp(SearchInterval, &seme1), i, NULL);
 	}
 
@@ -614,7 +630,10 @@ int main()
 	DownloadRate = (double)completed_down/current_time/NumPeers;
 	avgLife = (MinLife+MaxLife)/2.0;
 	avgContent = avgLife*(ContentRate+DownloadRate);
-	transient = avgContent*(avgLife/2.0+1.0/ContentRate)/current_time;
+	//sched first generation after a ContentRate
+	//transient = avgContent*(avgLife/2.0+1.0/ContentRate)/current_time;
+	//sched first generation at time 0.0
+	transient = avgContent*(avgLife/2.0)/current_time;
 	printf("[%f]Warm-up effect: %f%%\n", current_time, transient/avgContent*100.0);
 	} while (transient/avgContent*100.0 > WarmUpRatio);
 	
