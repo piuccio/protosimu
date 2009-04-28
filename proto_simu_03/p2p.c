@@ -591,7 +591,7 @@ int main()
 	maximum = 0.0;
 	//Different exit strategy
 	do {
-		maximum += 10.0;
+		maximum = current_time + 10.0;
 		
 	while (current_time<maximum)
 	{
