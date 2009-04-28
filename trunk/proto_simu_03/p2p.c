@@ -21,7 +21,10 @@
 #define MaxContactTime 0.5
 #define SearchInterval 3  /* avg search interval */
 #define DownloadTime 5
-#define WarmUpRatio 2
+
+#define NumBatches 1
+#define WarmUpSample 10  /* How often to check for the end of warm-up */
+#define WarmUpTolerance 0.01 /* 1% fluctuation of the metric */
 
 typedef struct parameters_set Parameters;
 
@@ -74,14 +77,28 @@ double area_memory[NumPeers];
 //Prob content is not there when I start the search
 int search_should_succeed, started_search;
 
+// RESULTS
+typedef struct result_unit Result;
+struct result_unit {
+	//Aux
+	double notExisting; //Prob. content doesn't exist when I start search
+	double avgRelayTime; //Avg time to complete a relayed search
+	//Metrics
+	double avgNumContent; // Avg number of content in memory
+	double searchFail; //Prob. search fails
+	double downloadFail; //Prob. download fails
+	double histoContent[MaxID]; //Distribution of contents in the local memory
+	double avgCopies; //Avg copies of the same content
+	double downloadRate; //Avg downloads in the time unit
+	double avgSearchTime; //Avg time to complete a search
+	double notInSystem; //Prob. that a content is not in the system
+};
+
+Result results[NumBatches];
+Result warmup;
+Time warmup_time;
 
 Time current_time;
-
-//Different exit policy
-double DownloadRate = 0.0;
-double avgLife = 0.0;
-double avgContent = 0.0;
-double transient = 0.0;
 	
 
 extern double negexp(double,long *);
@@ -492,115 +509,67 @@ void end_search(int peer, Parameters* par) {
 	remove_record(&searches, rec);
 }
 
-void results(void)
-{
+/**
+ * At the end of a batch fills produce the statistic results
+ * Accepts
+ * - Result pointer, writes here the results 
+ * - Time duration, the whole duration of the batch
+ */
+void end_batch(Result *res, Time duration) {
  	int i;
  	double total=0.0;
+ 	double total_no_content=0.0;
  	for (i = 0 ; i<NumPeers; i++) {
+ 		//Border effect for memory occupancy and distributions
  		area_memory[i] += num_content[i] * ( current_time - last_memory_update[i]);
  		histo_content[num_content[i]] += current_time - last_memory_update[i];
  		last_memory_update[i] = current_time;
-		//printf("Peer: %d, Avg occupation: %f area: %f current time: %f\n", i, area_memory[i] / current_time, area_memory[i], current_time);
-		total += area_memory[i] / current_time;
+		total += area_memory[i] / duration;
 	}
-	for (i=0; i<MaxID; i++) {
-		
-	}
+	//Number of copies of the same content (time avg)
 	area_global_memory += (double)total_copies/unique_copies * (current_time - last_global_update);
-	//How many downloads each peer has in one second
-	printf("Avg number of content in memory: %f\n", total / NumPeers );
-	double DownloadRate = (double)completed_down/current_time/NumPeers;
-	double avgLife = (MinLife+MaxLife)/2.0;
-	double avgContent = avgLife*(ContentRate+DownloadRate);
-	printf("\tAvg download rate: %f\n", DownloadRate );
-	printf("\tTheoretical including download rate %f\n",avgContent);
-	double transient = avgContent*(avgLife/2.0+1.0/ContentRate)/current_time;
-	printf("\tTransient period %f (%.2f%%)\n",transient, transient/avgContent*100.0);
 	
-printf("Prob. search fails %f%%\n", (double)failed_search/total_search*100.0);
-	printf("\tTheoretical (only local search): %f%%\n", 100.0-(double)(avgContent+CacheSize)/MaxID*100.0);
-	printf("\tProb. content doesn't exist: %f%%\n", 100.0*(1.0-(double)search_should_succeed/started_search));
-printf("Prob. download fails %f%%\n", (double)failed_down/total_down*100.0);
-printf("Distribution of content in the local memory \n\t");
-
-total=0.0;
-double total_no_content=0.0;
-for (i=0; i<MaxID; i++) {
-	printf("%f ", histo_content[i]/current_time/NumPeers);
-	total+=histo_content[i]/current_time/NumPeers;
-	
-	//prob content is not in the system
-	if ( global_memory[i] == 0 ) {
-		time_no_content[i] += current_time - last_no_content[i];
-		last_no_content[i] = current_time;
-	}
-	total_no_content += time_no_content[i]/MaxID; 
-}
-printf("\n\tTotal : %f\n", total);
-
-printf("Avg copies of the same content: %f\n", (double)area_global_memory/current_time);
-printf("Avg downloads in the time unit: %f\n", (double)completed_down/current_time);
-printf("Avg time to complete a search: %f\n", total_search_time/total_search);
-	printf("\tAvg time for a relayed search: %f \n", total_search_time/relayed_search);
-printf("Prob. that a content is not in the system: %f%%\n", 100.0*total_no_content/current_time);
-
-}
-
-
-int main()
-{
-	Event *ev;
-	Time maximum;
-	int i,j;
-	
-	failed_search=0;
-	total_search=0;
-	failed_down=0;
-	total_down=0;
+	//Fill the statistics
+	res->avgNumContent = (double)total/NumPeers;
+	res->searchFail = (double)failed_search/total_search*100.0;
+		res->notExisting = 100.0*(1.0-(double)search_should_succeed/started_search);
+	res->downloadFail = (double)failed_down/total_down*100.0;
+	//distribution
+	total=0.0;
 	for (i=0; i<MaxID; i++) {
-		histo_content[i]=0;
+		res->histoContent[i] = histo_content[i]/duration/NumPeers;
+		total+=res->histoContent[i];
+	
+		//Border effect for Prob content is not in the system
+		if ( global_memory[i] == 0 ) {
+			time_no_content[i] += current_time - last_no_content[i];
+			last_no_content[i] = current_time;
+		}
+		total_no_content += time_no_content[i]/MaxID; 
 	}
-	completed_down=0;
-	total_search_time=0;
-	next_search=0;
-	search_should_succeed=0;
-	started_search=0;
-	total_copies=0;
-	unique_copies=0;
-	area_global_memory=0.0;
-	last_global_update=0.0;
-	
-	current_time = 0.0;
-	
-	
-	// Variables initialization
-	for (i=0 ; i<NumPeers ; i++){
-		num_content[i] = 0;
-		cache_counter[i] = 0;
-		last_memory_update[i]=0.0;
-		global_memory[i]=0;
-		time_no_content[i]=0;
-		last_no_content[i]=0;
-		for (j=0 ; j<MaxID ; j++)
-			memory[i][j] = FALSE;
-		
-			
-		/* Schedule the first GENERATION and SEARCH for all the peers in the system */
-		schedule(GENERATION , 0.0, i, NULL);
-		schedule(LOCAL_SEARCH, negexp(SearchInterval, &seme1), i, NULL);
-	}
+	if (total > 1.0001 || total < 0.9999 ) printf("Ops! distribution different from 1.0: %f", total);
+	res->avgCopies = (double)area_global_memory/duration;
+	res->downloadRate = (double)completed_down/duration;
+	res->avgSearchTime = (double)total_search_time/total_search;
+		res->avgRelayTime = (double)total_search_time/relayed_search;
+	res->notInSystem = 100.0*total_no_content/duration;
+}
 
-	maximum=200.0;
+
+/**
+ * Start a batch contains the main loop that manages the events
+ * Accepts
+ * - Result pointer, write here the results for the batch
+ * - Time start, when the batch starts (it's not current_time when i'm in warmup) 
+ * - Time end, when the batch is expected to end
+ * It modifyes the global variable current_time
+ */
+void start_batch(Result *res, Time start, Time end) {
+	Event *ev;
 	
-	//Different exit strategy
-	do {
-		maximum += 200.0;
-		
-	while (current_time<maximum)
-	{
+	while (current_time<end) {
 		ev = get_event(&event_list);
 		current_time = ev->time;
-		//printf("[%f] Evento: %d, Peer: %d\n", current_time, ev->type, ev->peer);
 		
 		switch (ev->type)
 		{
@@ -625,20 +594,103 @@ int main()
 		}
 		release_event(ev);
 	}
+	end_batch(res, current_time-start);
+}
+
+
+void print_batch(Result *res) {
+	int i;
+	printf("Avg number of content in memory: %f\n", res->avgNumContent );
+	printf("Prob. search fails %f%%\n", res->searchFail );
+		printf("\tProb. content doesn't exist: %f%%\n", res->notExisting );
+	printf("Prob. download fails %f%%\n", res->downloadFail);
+	printf("Distribution of content in the local memory \n\t");
+	for (i=0; i<MaxID; i++) {
+		printf("%f ", res->histoContent[i]);
+	}
+	printf("Avg copies of the same content: %f\n", res->avgCopies );
+	printf("Avg downloads in the time unit (in the system): %f\n", res->downloadRate );
+		printf("\tAvg download rate (per peer): %f\n", res->downloadRate/NumPeers );
+	printf("Avg time to complete a search: %f\n", res->avgSearchTime );
+		printf("\tAvg time for a relayed search: %f\n",  res->avgRelayTime );
+	printf("Prob. that a content is not in the system: %f%%\n", res->notInSystem);
+	printf("\n\n");
+}
+
+
+int main()
+{
+	int i,j;
+	//Variables initialization
+	next_search=0;
+	failed_search=0;
+	total_search=0;
+	relayed_search=0;
+	failed_down=0;
+	total_down=0;
+	for (i=0; i<MaxID; i++) {
+		histo_content[i]=0;
+	}
+	area_global_memory=0.0;
+	last_global_update=0.0;
+	total_copies=0;
+	unique_copies=0;
+	completed_down=0;
+	total_search_time=0;
+	search_should_succeed=0;
+	started_search=0;
 	
-	//Different exit strategy
-	DownloadRate = (double)completed_down/current_time/NumPeers;
-	avgLife = (MinLife+MaxLife)/2.0;
-	avgContent = avgLife*(ContentRate+DownloadRate);
-	//sched first generation after a ContentRate
-	//transient = avgContent*(avgLife/2.0+1.0/ContentRate)/current_time;
-	//sched first generation at time 0.0
-	transient = avgContent*(avgLife/2.0)/current_time;
-	printf("[%f]Warm-up effect: %f%%\n", current_time, transient/avgContent*100.0);
-	} while (transient/avgContent*100.0 > WarmUpRatio);
+	current_time = 0.0;
+	warmup_time = 0.0;
+
 	
-	printf("Simulation time: %f\n\n", current_time);
-	results();
+	for (i=0 ; i<NumPeers ; i++){
+		num_content[i] = 0;
+		cache_counter[i] = 0;
+		last_memory_update[i]=0.0;
+		global_memory[i]=0;
+		time_no_content[i]=0;
+		last_no_content[i]=0;
+		area_memory[i]=0.0;
+		for (j=0 ; j<MaxID ; j++)
+			memory[i][j] = FALSE;
+		
+			
+		/* Schedule the first GENERATION and SEARCH for all the peers in the system */
+		schedule(GENERATION , 0.0, i, NULL);
+		schedule(LOCAL_SEARCH, negexp(SearchInterval, &seme1), i, NULL);
+	}
+
+	//Compute warm up transient (stabilize avgNumContent)
+	double prevNumContent=0.0;
+	double variance=0.0;
+	boolean decreasing=FALSE;
+	i=0;
+	do {
+		//The warmup always starts at 0.0, but I recursively update the end
+		start_batch(&warmup, 0.0, current_time+WarmUpSample);
+		i++;
+		variance = (double)(warmup.avgNumContent-prevNumContent)/warmup.avgNumContent;
+		decreasing = variance < 0 ? TRUE : FALSE;
+		prevNumContent = warmup.avgNumContent;
+		printf("[%f]Variance: %f\n", current_time, variance); 
+		//print_batch(&warmup);
+	} while (variance > WarmUpTolerance || decreasing==FALSE);
+	//print_batch(&warmup);
 	
-return 0;
+	//Here the warmup ends
+	warmup_time = current_time;
+	
+	int current_batch;
+	for (current_batch=0; current_batch<NumBatches; current_batch++) {
+		//I Should reset all the metrics and stat computing batches
+		//to check with the oracle I simply keep going
+		Time start_current_batch=current_time;
+		do {
+			//start_batch(&results[current_batch], start_current_batch, current_time+10);
+			start_batch(&results[current_batch], 0.0, current_time+10);
+			printf("[%f]NumContent: %f\n", current_time, results[current_batch].avgNumContent);
+		} while (current_time < 1000);
+	}
+return 1;
 }
