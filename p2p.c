@@ -24,7 +24,8 @@
 
 #define NumBatches 1
 #define WarmUpSample 10  /* How often to check for the end of warm-up */
-#define WarmUpTolerance 0.01 /* 1% fluctuation of the metric */
+#define WarmUpTolerance 0.01 /* % fluctuation of the metric */
+#define WarmUpReference 5 /* Chek with the last x smples */
 
 typedef struct parameters_set Parameters;
 
@@ -662,22 +663,36 @@ int main()
 	}
 
 	//Compute warm up transient (stabilize avgNumContent)
-	double prevNumContent=0.0;
-	double variance=0.0;
-	boolean decreasing=FALSE;
+	double avgSample=0.0, variance=0.0, relativeVariation=0.0;
+	double prevNumContent[WarmUpReference];
+	for (i=0; i<WarmUpReference; i++) {
+		prevNumContent[i]=0.0;
+	}
+	
+	//boolean decreasing=FALSE;
 	i=0;
 	do {
 		//The warmup always starts at 0.0, but I recursively update the end
 		start_batch(&warmup, 0.0, current_time+WarmUpSample);
-		i++;
-		variance = (double)(warmup.avgNumContent-prevNumContent)/warmup.avgNumContent;
-		decreasing = variance < 0 ? TRUE : FALSE;
-		prevNumContent = warmup.avgNumContent;
-		printf("[%f]Variance: %f\n", current_time, variance); 
+		variance = (double)(warmup.avgNumContent-prevNumContent[(i+WarmUpReference-1)%WarmUpReference])/warmup.avgNumContent;
+		//decreasing = variance < 0 ? TRUE : FALSE;
+		//printf("[%f]Variance: %f, mod %d\n", current_time, variance, (i+WarmUpReference-1)%WarmUpReference);
+		avgSample = 0.0;
+		for (j=0; j<WarmUpReference; j++) {
+			avgSample += prevNumContent[j]/WarmUpReference;
+			//printf("\t%f ", prevNumContent[j] );
+		}
+		//printf("\n");
+		prevNumContent[i] = warmup.avgNumContent;
+		//printf("\tAvg Sample: %f\n", avgSample);
+		relativeVariation = (warmup.avgNumContent-avgSample)/warmup.avgNumContent;
+		printf("[%f]Relative Variation: %f\n", current_time, relativeVariation);
+		i = (i+1)%WarmUpReference;
 		//print_batch(&warmup);
-	} while (variance > WarmUpTolerance || decreasing==FALSE);
-	//print_batch(&warmup);
-	
+	//} while (variance > WarmUpTolerance || decreasing==FALSE);
+	} while (relativeVariation > WarmUpTolerance );
+	print_batch(&warmup);
+	exit(1);
 	//Here the warmup ends
 	warmup_time = current_time;
 	
