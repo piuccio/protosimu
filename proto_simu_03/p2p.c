@@ -364,7 +364,7 @@ void local_search(int peer) {
 		par[i]->prev_search = peer;
 		par[i]->search_ID = search->key;
 		par[i]->content_ID = wanted_ID;
-		par[i]->num_relay = MaxRelay;
+		par[i]->num_relay = MaxRelay-1; //One hop has already been done
 		//Take a random peer
 		do {
 			next_peer = floor(uniform(0, NumPeers, &seme1));
