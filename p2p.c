@@ -27,7 +27,8 @@
 #define WarmUpSample 5  /* How often to check for the end of warm-up */
 #define WarmUpTolerance 0.01 /* % fluctuation of the metric */
 #define WarmUpReference 10 /* Chek with the last x samples */
-#define RatioBatchWarmUp 5 /* Ratio between the length of the WarmUp and that of a batch */ 
+#define RatioBatchWarmUp 5 /* Ratio between the length of the WarmUp and that of a batch */
+#define TargetConfidenceInterval 0.05 /* 10% of the avgNumContent */ 
 
 typedef struct parameters_set Parameters;
 
@@ -99,7 +100,10 @@ struct result_unit {
 
 Result results[MaxBatches];
 Result warmup;
-Result avgBatch;
+Result avgBatch, squaredSum;
+
+//Tstudent distribution
+double tstudent[20];
 
 Time warmup_time;
 
@@ -638,6 +642,28 @@ void init_variables(void) {
 		for (j=0 ; j<MaxID ; j++)
 			memory[i][j] = FALSE;
 	}
+	
+	//Fill the tstudent distribution 1%
+	tstudent[0] = 63.66;
+	tstudent[1] = 9.92;
+	tstudent[2] = 5.84;
+	tstudent[3] = 4.6;
+	tstudent[4] = 4.03;
+	tstudent[5] = 3.71;
+	tstudent[6] = 3.50;
+	tstudent[7] = 3.36;
+	tstudent[8] = 3.25;
+	tstudent[9] = 3.17;
+	tstudent[10] = 3.11;
+	tstudent[11] = 3.06;
+	tstudent[12] = 3.01;
+	tstudent[13] = 2.98;
+	tstudent[14] = 2.95;
+	tstudent[15] = 2.92;
+	tstudent[16] = 2.90;
+	tstudent[17] = 2.88;
+	tstudent[18] = 2.86;
+	tstudent[19] = 2.84;
 }
 
 
@@ -680,19 +706,63 @@ void batch_reset(void) {
 
 void average_batches(int Max) {
 	int i,j;
+	//Reset and compute the averages and the squared sums
+	avgBatch.avgNumContent = 0.0;
+	avgBatch.searchFail = 0.0;
+		avgBatch.notExisting = 0.0;
+	avgBatch.downloadFail = 0.0;
+	for (j=0; j<MaxID; j++) {
+		avgBatch.histoContent[j] = 0.0;
+	}
+	avgBatch.avgCopies = 0.0;
+	avgBatch.downloadRate = 0.0;
+	avgBatch.avgSearchTime = 0.0;
+		avgBatch.avgRelayTime = 0.0;
+	avgBatch.notInSystem = 0.0;
+	squaredSum.avgNumContent = 0.0;
+	squaredSum.searchFail = 0.0;
+		squaredSum.notExisting = 0.0;
+	squaredSum.downloadFail = 0.0;
+	/* Not for the histograms
+	for (j=0; j<MaxID; j++) {
+		squaredSum.histoContent[j] = 0.0;
+	}*/
+	squaredSum.avgCopies = 0.0;
+	squaredSum.downloadRate = 0.0;
+	squaredSum.avgSearchTime = 0.0;
+		squaredSum.avgRelayTime = 0.0;
+	squaredSum.notInSystem = 0.0;
+	
 	for (i=0; i<Max; i++) {
 		avgBatch.avgNumContent += results[i].avgNumContent/Max;
 		avgBatch.searchFail += results[i].searchFail/Max;
 			avgBatch.notExisting += results[i].notExisting/Max;
 		avgBatch.downloadFail += results[i].downloadFail/Max;
 		for (j=0; j<MaxID; j++) {
-			avgBatch.histoContent[j] += results[i].histoContent[j]/Max;;
+			avgBatch.histoContent[j] += results[i].histoContent[j]/Max;
 		}
 		avgBatch.avgCopies += results[i].avgCopies/Max;
 		avgBatch.downloadRate += results[i].downloadRate/Max;
 		avgBatch.avgSearchTime += results[i].avgSearchTime/Max;
 			avgBatch.avgRelayTime += results[i].avgRelayTime/Max;
 		avgBatch.notInSystem += results[i].notInSystem/Max;
+	}
+	
+	//Confidence interval
+	for (i=0; i<Max; i++) {
+		squaredSum.avgNumContent += pow(avgBatch.avgNumContent-results[i].avgNumContent, 2);
+		squaredSum.searchFail += pow(avgBatch.searchFail-results[i].searchFail, 2);
+			squaredSum.notExisting += pow(avgBatch.notExisting-results[i].notExisting, 2);
+		squaredSum.downloadFail += pow(avgBatch.downloadFail-results[i].downloadFail, 2);
+		/* Not for the histograms
+		for (j=0; j<MaxID; j++) {
+			squaredSum.histoContent[j] += pow(avgBatch.histoContent[j]-results[i].histoContent[j], 2);
+		}*/
+		squaredSum.avgCopies += pow(avgBatch.avgCopies-results[i].avgCopies, 2);
+		squaredSum.downloadRate += pow(avgBatch.downloadRate-results[i].downloadRate, 2);
+		squaredSum.avgSearchTime += pow(avgBatch.avgSearchTime-results[i].avgSearchTime, 2);
+			squaredSum.avgRelayTime += pow(avgBatch.avgRelayTime-results[i].avgRelayTime, 2);
+		squaredSum.notInSystem += pow(avgBatch.notInSystem-results[i].notInSystem, 2);
 	}
 }
 
@@ -757,12 +827,15 @@ int main()
 		i = (i+1)%WarmUpReference;
 		
 	} while (relativeVariation > WarmUpTolerance );  //Stop if averages doesn't much too much
-	print_batch(&warmup);
+	//print_batch(&warmup);
 	
 	//Here the warmup ends
 	warmup_time = current_time;
+	printf("Warm Up end at time %f\n", current_time); 
+	
 	
 	int current_batch;
+	double confidence_width;
 	for (current_batch=0; current_batch<MaxBatches; current_batch++) {
 		//Reset all the metrics and start computing batches
 		batch_reset();
@@ -779,14 +852,24 @@ int main()
 		start_batch(&results[current_batch], start_current_batch, current_time+RatioBatchWarmUp*warmup_time);
 		
 		//Results of this batch
-		printf("Batch: %d\n", current_batch);
-		print_batch(&results[current_batch]);
+		//printf("Batch: %d\n", current_batch);
+		//print_batch(&results[current_batch]);
 		
 		//Check if batches are enough
 		if ( current_batch >= MinBatches-1 ) {
-			//for now yes!
-			current_batch++;
-			break;
+			//Confidence interval | current_batch+1 is the number of batches
+			average_batches(current_batch+1);
+			// width = 2 * t_0.005 * s / sqrt(n)
+			confidence_width = 2.0*tstudent[current_batch]*sqrt(squaredSum.avgNumContent/current_batch)/sqrt(current_batch+1);
+			
+			printf("[%f] Confidence interval width after %d batches: %f\n", current_time, current_batch+1, confidence_width);
+			printf("\tRatio: %f\n", confidence_width/avgBatch.avgNumContent);
+			
+			if ( confidence_width/avgBatch.avgNumContent < TargetConfidenceInterval ) {
+				//Stop here
+				current_batch++;
+				break;
+			}
 		}
 	}
 	
@@ -794,6 +877,9 @@ int main()
 	average_batches(current_batch);
 	printf("\nAverage Batch\n");
 	print_batch(&avgBatch);
+	printf("Squared Sum\n");
+	print_batch(&squaredSum);
+	printf("Confidence interval on NumContent: %f\n", confidence_width);
 	//fclose(f);
 return 1;
 }
