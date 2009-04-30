@@ -22,10 +22,12 @@
 #define SearchInterval 3  /* avg search interval */
 #define DownloadTime 5
 
-#define NumBatches 1
-#define WarmUpSample 10  /* How often to check for the end of warm-up */
+#define MinBatches 2 /* Minum number of batches required */
+#define MaxBatches 20 /* If confidence interval is not satisfying run up to Max batches */
+#define WarmUpSample 5  /* How often to check for the end of warm-up */
 #define WarmUpTolerance 0.01 /* % fluctuation of the metric */
-#define WarmUpReference 5 /* Chek with the last x smples */
+#define WarmUpReference 10 /* Chek with the last x samples */
+#define RatioBatchWarmUp 5 /* Ratio between the length of the WarmUp and that of a batch */ 
 
 typedef struct parameters_set Parameters;
 
@@ -51,7 +53,7 @@ Record * cache[NumPeers]; // Structure for the announcement cache
 int cache_counter[NumPeers]; // Counter for the announcement cache
 int next_search; //globally unique ID of the next search
 
-Record *searches; //Structure for the search objects
+Record *searches=NULL; //Structure for the search objects
 
 /* Statistics */
 //probability that a search fails
@@ -95,8 +97,10 @@ struct result_unit {
 	double notInSystem; //Prob. that a content is not in the system
 };
 
-Result results[NumBatches];
+Result results[MaxBatches];
 Result warmup;
+Result avgBatch;
+
 Time warmup_time;
 
 Time current_time;
@@ -139,28 +143,6 @@ boolean is_present (int peer, Random_Peers* list) {
 	return FALSE;
 }
 
-/*
-**  Function : void get_input(char *format,void *variable)
-**  Return   : None
-**  Remarks  : To be used instead of scanf. 'format' is a scanf format,
-**             'variable' the pointer to the variable in which the input
-**             is written.
-*/
-
-void get_input(char *format,void *variable)
-{
-    static char linebuffer[255];
-    char *pin;
-
-    fgets(linebuffer, 255, stdin);	/*  Gets a data from stdin without  */
-    pin = strrchr (linebuffer, '\n');	/*  flushing problems		    */
-    if (pin!=NULL) *pin = '\0';
-
-    sscanf(linebuffer,format,variable);	/* Read only the beginning of the   */
-					/* line, letting the user to write  */
-					/* all the garbage he prefer on the */
-					/* input line.			    */
-}
 
 /* Procedure to publish content to other peers
  * The parameters are the ID to publish and the peer generating the publishment */
@@ -513,7 +495,7 @@ void end_search(int peer, Parameters* par) {
 /**
  * At the end of a batch fills produce the statistic results
  * Accepts
- * - Result pointer, writes here the results 
+ * - Result pointer, write here the results 
  * - Time duration, the whole duration of the batch
  */
 void end_batch(Result *res, Time duration) {
@@ -601,6 +583,7 @@ void start_batch(Result *res, Time start, Time end) {
 
 void print_batch(Result *res) {
 	int i;
+	printf("[Batch results at time %f]\n", current_time);
 	printf("Avg number of content in memory: %f\n", res->avgNumContent );
 	printf("Prob. search fails %f%%\n", res->searchFail );
 		printf("\tProb. content doesn't exist: %f%%\n", res->notExisting );
@@ -619,8 +602,7 @@ void print_batch(Result *res) {
 }
 
 
-int main()
-{
+void init_variables(void) {
 	int i,j;
 	//Variables initialization
 	next_search=0;
@@ -630,14 +612,14 @@ int main()
 	failed_down=0;
 	total_down=0;
 	for (i=0; i<MaxID; i++) {
-		histo_content[i]=0;
+		histo_content[i]=0.0;
 	}
 	area_global_memory=0.0;
 	last_global_update=0.0;
 	total_copies=0;
 	unique_copies=0;
 	completed_down=0;
-	total_search_time=0;
+	total_search_time=0.0;
 	search_should_succeed=0;
 	started_search=0;
 	
@@ -650,20 +632,94 @@ int main()
 		cache_counter[i] = 0;
 		last_memory_update[i]=0.0;
 		global_memory[i]=0;
-		time_no_content[i]=0;
-		last_no_content[i]=0;
+		time_no_content[i]=0.0;
+		last_no_content[i]=0.0;
 		area_memory[i]=0.0;
 		for (j=0 ; j<MaxID ; j++)
 			memory[i][j] = FALSE;
-		
-			
+	}
+}
+
+
+void batch_reset(void) {
+	int i;
+	//Variables initialization
+	//next_search=0;
+	failed_search=0;
+	total_search=0;
+	relayed_search=0;
+	failed_down=0;
+	total_down=0;
+	for (i=0; i<MaxID; i++) {
+		histo_content[i]=0.0;
+	}
+	area_global_memory=0.0;
+	last_global_update=current_time;
+	//total_copies=0;
+	//unique_copies=0;
+	completed_down=0;
+	total_search_time=0.0;
+	search_should_succeed=0;
+	started_search=0;
+	
+	
+	for (i=0 ; i<NumPeers ; i++){
+		//num_content[i] = 0;
+		//cache_counter[i] = 0;
+		last_memory_update[i]=current_time;
+		//global_memory[i]=0;
+		time_no_content[i]=0.0;
+		last_no_content[i]=current_time;
+		area_memory[i]=0.0;
+		//for (j=0 ; j<MaxID ; j++) memory[i][j] = FALSE;
+	}
+	
+	//Remove all pending searches
+	searches = NULL;
+}
+
+void average_batches(int Max) {
+	int i,j;
+	for (i=0; i<Max; i++) {
+		avgBatch.avgNumContent += results[i].avgNumContent/Max;
+		avgBatch.searchFail += results[i].searchFail/Max;
+			avgBatch.notExisting += results[i].notExisting/Max;
+		avgBatch.downloadFail += results[i].downloadFail/Max;
+		for (j=0; j<MaxID; j++) {
+			avgBatch.histoContent[j] += results[i].histoContent[j]/Max;;
+		}
+		avgBatch.avgCopies += results[i].avgCopies/Max;
+		avgBatch.downloadRate += results[i].downloadRate/Max;
+		avgBatch.avgSearchTime += results[i].avgSearchTime/Max;
+			avgBatch.avgRelayTime += results[i].avgRelayTime/Max;
+		avgBatch.notInSystem += results[i].notInSystem/Max;
+	}
+}
+
+int main()
+{
+	int i,j;
+	//Variables initialization
+	init_variables();
+	
+	for (i=0 ; i<NumPeers ; i++){
 		/* Schedule the first GENERATION and SEARCH for all the peers in the system */
 		schedule(GENERATION , 0.0, i, NULL);
 		schedule(LOCAL_SEARCH, negexp(SearchInterval, &seme1), i, NULL);
 	}
-
+	/*
+	//Write all the 10sec samples in a file
+	FILE* f;
+	f=fopen("/tmp/avgNumContent.dat", "w");
+	if (f == NULL) {
+		fprintf(stderr, "Error opening the file");
+		exit(1);
+	}
+	fprintf(f,"#Average Number of content in the local memory over the time\n0 0");
+	*/
+	
 	//Compute warm up transient (stabilize avgNumContent)
-	double avgSample=0.0, variance=0.0, relativeVariation=0.0;
+	double avgSample=0.0, relativeVariation=0.0;
 	double prevNumContent[WarmUpReference];
 	for (i=0; i<WarmUpReference; i++) {
 		prevNumContent[i]=0.0;
@@ -674,38 +730,70 @@ int main()
 	do {
 		//The warmup always starts at 0.0, but I recursively update the end
 		start_batch(&warmup, 0.0, current_time+WarmUpSample);
-		variance = (double)(warmup.avgNumContent-prevNumContent[(i+WarmUpReference-1)%WarmUpReference])/warmup.avgNumContent;
-		//decreasing = variance < 0 ? TRUE : FALSE;
-		//printf("[%f]Variance: %f, mod %d\n", current_time, variance, (i+WarmUpReference-1)%WarmUpReference);
+		
+		//Take the last sample of number of content in the system
+		prevNumContent[i] = warmup.avgNumContent;
+			
+		/* Last samples (istantaneous)
+		for (j=0; j<NumPeers; j++) {
+			prevNumContent[i] += (double)num_content[j]/NumPeers;
+		}*/
+		
+		//Compute the average of the last WarmUpReference samples 
 		avgSample = 0.0;
 		for (j=0; j<WarmUpReference; j++) {
 			avgSample += prevNumContent[j]/WarmUpReference;
-			//printf("\t%f ", prevNumContent[j] );
 		}
-		//printf("\n");
-		prevNumContent[i] = warmup.avgNumContent;
-		//printf("\tAvg Sample: %f\n", avgSample);
-		relativeVariation = (warmup.avgNumContent-avgSample)/warmup.avgNumContent;
-		printf("[%f]Relative Variation: %f\n", current_time, relativeVariation);
+		
+		
+		//difference from total avg and last k samples
+		relativeVariation = fabs( (warmup.avgNumContent-avgSample)/warmup.avgNumContent );
+		//printf("[%f]Relative Variation: %f\n", current_time, relativeVariation);
+		
+		//Write to file the current sample
+		//fprintf(f,"%.0f %f\n", current_time, warmup.avgNumContent);
+		
+		//Iterate
 		i = (i+1)%WarmUpReference;
-		//print_batch(&warmup);
-	//} while (variance > WarmUpTolerance || decreasing==FALSE);
-	} while (relativeVariation > WarmUpTolerance );
+		
+	} while (relativeVariation > WarmUpTolerance );  //Stop if averages doesn't much too much
 	print_batch(&warmup);
-	exit(1);
+	
 	//Here the warmup ends
 	warmup_time = current_time;
 	
 	int current_batch;
-	for (current_batch=0; current_batch<NumBatches; current_batch++) {
-		//I Should reset all the metrics and stat computing batches
-		//to check with the oracle I simply keep going
-		Time start_current_batch=current_time;
+	for (current_batch=0; current_batch<MaxBatches; current_batch++) {
+		//Reset all the metrics and start computing batches
+		batch_reset();
+		
+		/* Run this to get samples every [WarmUpSample] seconds
 		do {
-			//start_batch(&results[current_batch], start_current_batch, current_time+10);
-			start_batch(&results[current_batch], 0.0, current_time+10);
-			printf("[%f]NumContent: %f\n", current_time, results[current_batch].avgNumContent);
-		} while (current_time < 1000);
+			start_batch(&results[current_batch], 0.0, current_time+WarmUpSample);
+			//Write to file the current sample
+			fprintf(f, "%.0f %f\n", current_time, results[current_batch].avgNumContent);
+		} while (current_time < 2000);
+		*/
+		
+		Time start_current_batch=current_time;
+		start_batch(&results[current_batch], start_current_batch, current_time+RatioBatchWarmUp*warmup_time);
+		
+		//Results of this batch
+		printf("Batch: %d\n", current_batch);
+		print_batch(&results[current_batch]);
+		
+		//Check if batches are enough
+		if ( current_batch >= MinBatches-1 ) {
+			//for now yes!
+			current_batch++;
+			break;
+		}
 	}
+	
+	//Average the results for all the collected batches
+	average_batches(current_batch);
+	printf("\nAverage Batch\n");
+	print_batch(&avgBatch);
+	//fclose(f);
 return 1;
 }
