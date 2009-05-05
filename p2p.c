@@ -8,7 +8,7 @@
 
 
 #define MaxID 1000
-#define ContentRate 1
+#define ContentRate 0.5
 #define MinLife 40
 #define MaxLife 60
 #define CacheSize 30
@@ -22,7 +22,7 @@
 #define SearchInterval 3  /* avg search interval */
 #define DownloadTime 5
 
-#define MinBatches 2 /* Minum number of batches required */
+#define MinBatches 10 /* Minum number of batches required */
 #define MaxBatches 20 /* If confidence interval is not satisfying run up to Max batches */
 #define WarmUpSample 5  /* How often to check for the end of warm-up */
 #define WarmUpTolerance 0.01 /* % fluctuation of the metric */
@@ -65,9 +65,9 @@ int failed_down, total_down;
 Time histo_content[MaxID];  //Time spent with that number of contents
 Time last_memory_update[NumPeers];
 //avg copies of the same content in the system
-double area_global_memory;  //time avg
+double area_global_memory;
 Time last_global_update;
-int total_copies, unique_copies;
+int total_copies;
 //avg downloads in the time unit
 int completed_down;
 //avg time to complete a search phase
@@ -92,7 +92,7 @@ struct result_unit {
 	double searchFail; //Prob. search fails
 	double downloadFail; //Prob. download fails
 	double histoContent[MaxID]; //Distribution of contents in the local memory
-	double avgCopies; //Avg copies of the same content
+	double avgCopies; //Avg copies of the same content (total / MaxID)
 	double downloadRate; //Avg downloads in the time unit
 	double avgSearchTime; //Avg time to complete a search
 	double notInSystem; //Prob. that a content is not in the system
@@ -189,14 +189,13 @@ void end_of_download(int peer, Parameters * par){
 		num_content[peer]++;
 		
 		//And in the global memory
-		if ( unique_copies > 0 )
-			area_global_memory += (double)total_copies/unique_copies * (current_time - last_global_update);
+		area_global_memory += (double)total_copies/MaxID * (current_time - last_global_update);
 		last_global_update = current_time;
 		total_copies++;
 		if ( global_memory[par->content_ID] == 0 ) {
-			//I'm adding a unique content
-			unique_copies++;
+			//I'm adding a unique content in the system
 			time_no_content[par->content_ID] += current_time - last_no_content[par->content_ID];
+			//printf("D[%.0f - %.0f] %d is updating %f\n", current_time, last_no_content[par->content_ID], par->content_ID, time_no_content[par->content_ID]);
 		}
 		global_memory[par->content_ID]++;
 		
@@ -232,14 +231,13 @@ void generation(int peer){
 		last_memory_update[peer] = current_time;
 		num_content[peer]++;
 		
-		//Check if it is unique in the system
-		if ( unique_copies > 0 )
-			area_global_memory += (double)total_copies/unique_copies * (current_time - last_global_update);
+		//Update the avg number of copies
+		area_global_memory += (double)total_copies/MaxID * (current_time - last_global_update);
 		last_global_update = current_time;
 		total_copies++;
 		if ( global_memory[ID] == 0 ) {
-			unique_copies++;
 			time_no_content[ID] += current_time - last_no_content[ID];
+			//printf("G[%.0f - %.0f] %d is updating %f\n", current_time, last_no_content[ID], ID, time_no_content[ID]);
 		}
 		global_memory[ID]++;
 	  
@@ -267,12 +265,11 @@ void removal(Parameters* par, int peer){
 	num_content[peer]--;
 	
 	//Global memory
-	area_global_memory += (double)total_copies/unique_copies * (current_time - last_global_update);
+	area_global_memory += (double)total_copies/MaxID * (current_time - last_global_update);
 	last_global_update = current_time;
 	total_copies--;
 	if ( global_memory[par->content_ID] == 1 ) {
 		//this is the last one
-		unique_copies--;
 		last_no_content[par->content_ID] = current_time;
 	}
 	global_memory[par->content_ID]--;
@@ -303,7 +300,6 @@ void publish(Parameters *par, int peer){
 void local_search(int peer) {
 	//What am I looking for ?
 	int wanted_ID = uniform(0, MaxID, &seme1);
-	//printf("[%f] Searching %d\n", current_time, wanted_ID);
 	
 	//Should the search succeed ?
 	started_search++;
@@ -372,12 +368,10 @@ void local_search(int peer) {
 		//Take a random peer
 		do {
 			next_peer = floor(uniform(0, NumPeers, &seme1));
-			//printf(".%d ", next_peer);
 		} while ( is_present(next_peer, &rnd) );
 		
 		double contact_time = uniform(MinContactTime, MaxContactTime, &seme1);
 		schedule(RELAY_SEARCH, current_time + contact_time, next_peer, par[i]);
-		//printf("Relay to %d\n", next_peer);
 	}
 	
 	//Set timeout
@@ -390,11 +384,8 @@ void local_search(int peer) {
 
 
 void relay_search(int peer, Parameters* par) {
-	//printf("Searching %d at relay %d from %d hop count %d\n", par->content_ID, peer, par->gen_search, par->num_relay);
-	
 	//Do I have it?
 	if ( memory[peer][par->content_ID] ) {
-		//printf("%d has %d\n", peer, par->content_ID);
 		//Tell to who started the search
 		par->gen_peer = peer;
 		schedule(END_SEARCH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), par->gen_search, par);
@@ -407,12 +398,11 @@ void relay_search(int peer, Parameters* par) {
 		//Tell him
 		par->gen_peer = rec->gen_peer;
 		
-		//printf("%d cached %d owned by %d\n", peer, par->content_ID, par->gen_peer);
 		schedule(END_SEARCH, current_time + uniform(MinContactTime, MaxContactTime, &seme1), par->gen_search, par);
 		
 		return;
 	}
-	//printf("Searching %d at relay %d from %d hop count %d\n", par->content_ID, peer, par->gen_search, par->num_relay);
+
 	//Keep relaying
 	Parameters* new_par[NumSearch];
 	if ( par->num_relay > 0 ) {
@@ -447,7 +437,6 @@ void relay_search(int peer, Parameters* par) {
 
 
 void timeout_search(int peer, Parameters* par ) {
-	//printf("[%f] Timeout expired", current_time);
 	Record* search = search_record(&searches, par->search_ID);
 	if (search==NULL) {
 		//I already replyed to this search because it's not in the pending list
@@ -484,8 +473,7 @@ void end_search(int peer, Parameters* par) {
 		total_down++;
 		schedule(END_DOWNLOAD, current_time + negexp(DownloadTime, &seme1), peer, par);
 	} else {
-		//Search failed?
-		//failed_search++;
+		//Search is still considered good
 		failed_down++;
 		//schedule a new one
 		schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), peer, NULL);
@@ -505,7 +493,6 @@ void end_search(int peer, Parameters* par) {
 void end_batch(Result *res, Time duration) {
  	int i;
  	double total=0.0;
- 	double total_no_content=0.0;
  	for (i = 0 ; i<NumPeers; i++) {
  		//Border effect for memory occupancy and distributions
  		area_memory[i] += num_content[i] * ( current_time - last_memory_update[i]);
@@ -514,7 +501,7 @@ void end_batch(Result *res, Time duration) {
 		total += area_memory[i] / duration;
 	}
 	//Number of copies of the same content (time avg)
-	area_global_memory += (double)total_copies/unique_copies * (current_time - last_global_update);
+	area_global_memory += (double)total_copies/MaxID * (current_time - last_global_update);
 	
 	//Fill the statistics
 	res->avgNumContent = (double)total/NumPeers;
@@ -523,6 +510,7 @@ void end_batch(Result *res, Time duration) {
 	res->downloadFail = (double)failed_down/total_down*100.0;
 	//distribution
 	total=0.0;
+	double total_no_content=0.0;
 	for (i=0; i<MaxID; i++) {
 		res->histoContent[i] = histo_content[i]/duration/NumPeers;
 		total+=res->histoContent[i];
@@ -596,6 +584,7 @@ void print_batch(Result *res) {
 	for (i=0; i<MaxID; i++) {
 		printf("%f ", res->histoContent[i]);
 	}
+	printf("\n");
 	printf("Avg copies of the same content: %f\n", res->avgCopies );
 	printf("Avg downloads in the time unit (in the system): %f\n", res->downloadRate );
 		printf("\tAvg download rate (per peer): %f\n", res->downloadRate/NumPeers );
@@ -621,7 +610,6 @@ void init_variables(void) {
 	area_global_memory=0.0;
 	last_global_update=0.0;
 	total_copies=0;
-	unique_copies=0;
 	completed_down=0;
 	total_search_time=0.0;
 	search_should_succeed=0;
@@ -678,6 +666,8 @@ void batch_reset(void) {
 	total_down=0;
 	for (i=0; i<MaxID; i++) {
 		histo_content[i]=0.0;
+		time_no_content[i]=0.0;
+		last_no_content[i]=current_time;
 	}
 	area_global_memory=0.0;
 	last_global_update=current_time;
@@ -694,14 +684,19 @@ void batch_reset(void) {
 		//cache_counter[i] = 0;
 		last_memory_update[i]=current_time;
 		//global_memory[i]=0;
-		time_no_content[i]=0.0;
-		last_no_content[i]=current_time;
 		area_memory[i]=0.0;
 		//for (j=0 ; j<MaxID ; j++) memory[i][j] = FALSE;
 	}
 	
-	//Remove all pending searches
-	searches = NULL;
+	//Remove all pending searches, peers with pending search must be reactivated
+	Record* s = out_list(&searches);
+	while (s != NULL ) {
+		schedule(LOCAL_SEARCH, negexp(SearchInterval, &seme1), s->gen_peer, NULL);
+		release_record(s);
+		
+		//Iterate
+		s = out_list(&searches);
+	}
 }
 
 void average_batches(int Max) {
@@ -827,6 +822,7 @@ int main()
 		i = (i+1)%WarmUpReference;
 		
 	} while (relativeVariation > WarmUpTolerance );  //Stop if averages doesn't much too much
+	//} while (current_time < 2000 ); exit(1);
 	//print_batch(&warmup);
 	
 	//Here the warmup ends
@@ -840,20 +836,12 @@ int main()
 		//Reset all the metrics and start computing batches
 		batch_reset();
 		
-		/* Run this to get samples every [WarmUpSample] seconds
-		do {
-			start_batch(&results[current_batch], 0.0, current_time+WarmUpSample);
-			//Write to file the current sample
-			fprintf(f, "%.0f %f\n", current_time, results[current_batch].avgNumContent);
-		} while (current_time < 2000);
-		*/
-		
 		Time start_current_batch=current_time;
 		start_batch(&results[current_batch], start_current_batch, current_time+RatioBatchWarmUp*warmup_time);
 		
 		//Results of this batch
-		//printf("Batch: %d\n", current_batch);
-		//print_batch(&results[current_batch]);
+		printf("Batch: %d\n", current_batch);
+		print_batch(&results[current_batch]);
 		
 		//Check if batches are enough
 		if ( current_batch >= MinBatches-1 ) {
