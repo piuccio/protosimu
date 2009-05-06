@@ -9,8 +9,8 @@
 
 #define MaxID 1000
 #define ContentRate 0.5
-#define MinLife 40
-#define MaxLife 60
+#define MinLife 50
+#define MaxLife 90
 #define CacheSize 30
 #define NumPeers 30
 #define NumPublish 2
@@ -27,8 +27,8 @@
 #define WarmUpSample 5  /* How often to check for the end of warm-up */
 #define WarmUpTolerance 0.01 /* % fluctuation of the metric */
 #define WarmUpReference 10 /* Chek with the last x samples */
-#define RatioBatchWarmUp 5 /* Ratio between the length of the WarmUp and that of a batch */
-#define TargetConfidenceInterval 0.05 /* 10% of the avgNumContent */ 
+#define RatioBatchWarmUp 10 /* Ratio between the length of the WarmUp and that of a batch */
+#define TargetConfidenceInterval 0.05 /* 5% of the avgNumContent */ 
 
 typedef struct parameters_set Parameters;
 
@@ -631,7 +631,7 @@ void init_variables(void) {
 			memory[i][j] = FALSE;
 	}
 	
-	//Fill the tstudent distribution 1%
+	/* tstudent distribution 1%
 	tstudent[0] = 63.66;
 	tstudent[1] = 9.92;
 	tstudent[2] = 5.84;
@@ -651,7 +651,52 @@ void init_variables(void) {
 	tstudent[16] = 2.90;
 	tstudent[17] = 2.88;
 	tstudent[18] = 2.86;
-	tstudent[19] = 2.84;
+	tstudent[19] = 2.84;*/
+	
+	/*tstudent distribution 5%
+	tstudent[0] = 12.71;
+	tstudent[1] = 4.30;
+	tstudent[2] = 3.18;
+	tstudent[3] = 2.78;
+	tstudent[4] = 2.57;
+	tstudent[5] = 2.45;
+	tstudent[6] = 2.36;
+	tstudent[7] = 2.31;
+	tstudent[8] = 2.26;
+	tstudent[9] = 2.23;
+	tstudent[10] = 2.20;
+	tstudent[11] = 2.18;
+	tstudent[12] = 2.16;
+	tstudent[13] = 2.14;
+	tstudent[14] = 2.13;
+	tstudent[15] = 2.12;
+	tstudent[16] = 2.11;
+	tstudent[17] = 2.10;
+	tstudent[18] = 2.09;
+	tstudent[19] = 2.09;*/
+	
+	
+	//tstudent distribution 10%
+	tstudent[0] = 6.31;
+	tstudent[1] = 2.92;
+	tstudent[2] = 2.35;
+	tstudent[3] = 2.13;
+	tstudent[4] = 2.02;
+	tstudent[5] = 1.94;
+	tstudent[6] = 1.90;
+	tstudent[7] = 1.86;
+	tstudent[8] = 1.83;
+	tstudent[9] = 1.81;
+	tstudent[10] = 1.80;
+	tstudent[11] = 1.78;
+	tstudent[12] = 1.77;
+	tstudent[13] = 1.76;
+	tstudent[14] = 1.75;
+	tstudent[15] = 1.75;
+	tstudent[16] = 1.74;
+	tstudent[17] = 1.73;
+	tstudent[18] = 1.73;
+	tstudent[19] = 1.72;
 }
 
 
