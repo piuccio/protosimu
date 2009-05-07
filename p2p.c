@@ -80,7 +80,11 @@ Time last_no_content[MaxID];
 double area_memory[NumPeers];
 //Prob content is not there when I start the search
 int search_should_succeed, started_search;
+//Average Number of Content to file
+Time last_file_sample;
+FILE* f;
 
+	
 // RESULTS
 typedef struct result_unit Result;
 struct result_unit {
@@ -176,7 +180,6 @@ void end_of_download(int peer, Parameters * par){
 	// Update the statistics
 	completed_down++;
 	
-	//printf("Download ID: %d, from peer: %d \n", par->content_ID, peer);
 	// Check if already in memory (i.e. generation during download time)
 	if (!memory[peer][par->content_ID]){ // if present do nothing
 		// Save in the local memory
@@ -195,7 +198,6 @@ void end_of_download(int peer, Parameters * par){
 		if ( global_memory[par->content_ID] == 0 ) {
 			//I'm adding a unique content in the system
 			time_no_content[par->content_ID] += current_time - last_no_content[par->content_ID];
-			//printf("D[%.0f - %.0f] %d is updating %f\n", current_time, last_no_content[par->content_ID], par->content_ID, time_no_content[par->content_ID]);
 		}
 		global_memory[par->content_ID]++;
 		
@@ -237,7 +239,6 @@ void generation(int peer){
 		total_copies++;
 		if ( global_memory[ID] == 0 ) {
 			time_no_content[ID] += current_time - last_no_content[ID];
-			//printf("G[%.0f - %.0f] %d is updating %f\n", current_time, last_no_content[ID], ID, time_no_content[ID]);
 		}
 		global_memory[ID]++;
 	  
@@ -463,7 +464,7 @@ void end_search(int peer, Parameters* par) {
 		//This search is not pending, either is completed or timed-out
 		return;
 	}
-	
+	 
 	total_search++;
 	relayed_search++;
 	total_search_time += current_time - rec->arrival;
@@ -490,10 +491,10 @@ void end_search(int peer, Parameters* par) {
  * - Result pointer, write here the results 
  * - Time duration, the whole duration of the batch
  */
-void end_batch(Result *res, Time duration) {
+void batch_result(Result *res, Time duration) {
  	int i;
  	double total=0.0;
- 	for (i = 0 ; i<NumPeers; i++) {
+ 	for (i=0 ; i<NumPeers; i++) {
  		//Border effect for memory occupancy and distributions
  		area_memory[i] += num_content[i] * ( current_time - last_memory_update[i]);
  		histo_content[num_content[i]] += current_time - last_memory_update[i];
@@ -522,7 +523,7 @@ void end_batch(Result *res, Time duration) {
 		}
 		total_no_content += time_no_content[i]/MaxID; 
 	}
-	if (total > 1.0001 || total < 0.9999 ) printf("Ops! distribution different from 1.0: %f", total);
+	if (total > 1.0001 || total < 0.9999 ) printf("Ops! distribution different from 1.0: %f\n", total);
 	res->avgCopies = (double)area_global_memory/duration;
 	res->downloadRate = (double)completed_down/duration;
 	res->avgSearchTime = (double)total_search_time/total_search;
@@ -532,15 +533,12 @@ void end_batch(Result *res, Time duration) {
 
 
 /**
- * Start a batch contains the main loop that manages the events
- * Accepts
- * - Result pointer, write here the results for the batch
- * - Time start, when the batch starts (it's not current_time when i'm in warmup) 
- * - Time end, when the batch is expected to end
- * It modifyes the global variable current_time
+ * Event Loop
+ * Manage the flow of time and the events
  */
-void start_batch(Result *res, Time start, Time end) {
+void event_loop(Time duration) {
 	Event *ev;
+	Time end = current_time + duration;
 	
 	while (current_time<end) {
 		ev = get_event(&event_list);
@@ -569,8 +567,8 @@ void start_batch(Result *res, Time start, Time end) {
 		}
 		release_event(ev);
 	}
-	end_batch(res, current_time-start);
 }
+
 
 
 void print_batch(Result *res) {
@@ -617,7 +615,7 @@ void init_variables(void) {
 	
 	current_time = 0.0;
 	warmup_time = 0.0;
-
+	last_file_sample=0.0;
 	
 	for (i=0 ; i<NumPeers ; i++){
 		num_content[i] = 0;
@@ -717,14 +715,14 @@ void batch_reset(void) {
 	area_global_memory=0.0;
 	last_global_update=current_time;
 	//total_copies=0;
-	//unique_copies=0;
 	completed_down=0;
 	total_search_time=0.0;
 	search_should_succeed=0;
 	started_search=0;
+	last_file_sample=current_time;
 	
 	
-	for (i=0 ; i<NumPeers ; i++){
+	for (i=0; i<NumPeers; i++){
 		//num_content[i] = 0;
 		//cache_counter[i] = 0;
 		last_memory_update[i]=current_time;
@@ -736,7 +734,7 @@ void batch_reset(void) {
 	//Remove all pending searches, peers with pending search must be reactivated
 	Record* s = out_list(&searches);
 	while (s != NULL ) {
-		schedule(LOCAL_SEARCH, negexp(SearchInterval, &seme1), s->gen_peer, NULL);
+		schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), s->gen_peer, NULL);
 		release_record(s);
 		
 		//Iterate
@@ -812,21 +810,19 @@ int main()
 	//Variables initialization
 	init_variables();
 	
+	//Write occupancy to a file
+	f=fopen("/tmp/avgNumContent.dat", "w");
+	if (f == NULL) {
+		fprintf(stderr, "Error opening the file");
+		return 1;
+	}
+	fprintf(f,"#Average Number of content in the local memory over the time\n0 0\n");
+
 	for (i=0 ; i<NumPeers ; i++){
 		/* Schedule the first GENERATION and SEARCH for all the peers in the system */
 		schedule(GENERATION , 0.0, i, NULL);
 		schedule(LOCAL_SEARCH, negexp(SearchInterval, &seme1), i, NULL);
 	}
-	/*
-	//Write all the 10sec samples in a file
-	FILE* f;
-	f=fopen("/tmp/avgNumContent.dat", "w");
-	if (f == NULL) {
-		fprintf(stderr, "Error opening the file");
-		exit(1);
-	}
-	fprintf(f,"#Average Number of content in the local memory over the time\n0 0");
-	*/
 	
 	//Compute warm up transient (stabilize avgNumContent)
 	double avgSample=0.0, relativeVariation=0.0;
@@ -835,45 +831,35 @@ int main()
 		prevNumContent[i]=0.0;
 	}
 	
-	//boolean decreasing=FALSE;
 	i=0;
 	do {
-		//The warmup always starts at 0.0, but I recursively update the end
-		start_batch(&warmup, 0.0, current_time+WarmUpSample);
+		//Run the event loop until the system is stable
+		event_loop(WarmUpSample);
+		batch_result(&warmup, current_time);
 		
 		//Take the last sample of number of content in the system
 		prevNumContent[i] = warmup.avgNumContent;
 			
-		/* Last samples (istantaneous)
-		for (j=0; j<NumPeers; j++) {
-			prevNumContent[i] += (double)num_content[j]/NumPeers;
-		}*/
-		
 		//Compute the average of the last WarmUpReference samples 
 		avgSample = 0.0;
 		for (j=0; j<WarmUpReference; j++) {
 			avgSample += prevNumContent[j]/WarmUpReference;
 		}
 		
-		
 		//difference from total avg and last k samples
 		relativeVariation = fabs( (warmup.avgNumContent-avgSample)/warmup.avgNumContent );
-		//printf("[%f]Relative Variation: %f\n", current_time, relativeVariation);
 		
 		//Write to file the current sample
-		//fprintf(f,"%.0f %f\n", current_time, warmup.avgNumContent);
+		fprintf(f,"%.0f %f\n", current_time, warmup.avgNumContent);
 		
 		//Iterate
 		i = (i+1)%WarmUpReference;
 		
 	} while (relativeVariation > WarmUpTolerance );  //Stop if averages doesn't much too much
-	//} while (current_time < 2000 ); exit(1);
-	//print_batch(&warmup);
 	
 	//Here the warmup ends
 	warmup_time = current_time;
 	printf("Warm Up end at time %f\n", current_time); 
-	
 	
 	int current_batch;
 	double confidence_width;
@@ -881,8 +867,17 @@ int main()
 		//Reset all the metrics and start computing batches
 		batch_reset();
 		
+		//Run a batch for enough time
 		Time start_current_batch=current_time;
-		start_batch(&results[current_batch], start_current_batch, current_time+RatioBatchWarmUp*warmup_time);
+		Time end_batch = current_time + RatioBatchWarmUp*warmup_time;
+		while (current_time < end_batch) {
+			//Collect samples every x seconds
+			event_loop(20);
+			batch_result(&results[current_batch], current_time - start_current_batch);
+			
+			//Write to file
+			fprintf(f,"%.0f %f\n", current_time, results[current_batch].avgNumContent);
+		}
 		
 		//Results of this batch
 		printf("Batch: %d\n", current_batch);
@@ -910,9 +905,10 @@ int main()
 	average_batches(current_batch);
 	printf("\nAverage Batch\n");
 	print_batch(&avgBatch);
-	printf("Squared Sum\n");
-	print_batch(&squaredSum);
+	//printf("Squared Sum\n");
+	//print_batch(&squaredSum);
 	printf("Confidence interval on NumContent: %f\n", confidence_width);
-	//fclose(f);
-return 1;
+	printf("End od simulation!");
+	fclose(f);
+return 0;
 }
