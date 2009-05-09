@@ -910,7 +910,7 @@ int main()
 	//printf("Squared Sum\n");
 	//print_batch(&squaredSum);
 	printf("Confidence interval on NumContent: %f\n", confidence_width);
-	printf("End od simulation!");
+	printf("End of simulation!");
 	fclose(f);
 return 0;
 }
