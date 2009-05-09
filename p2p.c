@@ -11,10 +11,10 @@
 #define ContentRate 0.5
 #define MinLife 50
 #define MaxLife 90
-#define CacheSize 30
-#define NumPeers 30
-#define NumPublish 2
-#define NumSearch 3
+#define CacheSize 150
+#define NumPeers 50
+#define NumPublish 1
+#define NumSearch 4
 #define SearchTimeOut 10
 #define MaxRelay 2
 #define MinContactTime 0.1
@@ -864,6 +864,9 @@ int main()
 	int current_batch;
 	double confidence_width;
 	for (current_batch=0; current_batch<MaxBatches; current_batch++) {
+		//Start a new batch
+		printf("[%f] Start Batch: %d\n", current_time, current_batch);
+		
 		//Reset all the metrics and start computing batches
 		batch_reset();
 		
@@ -880,8 +883,7 @@ int main()
 		}
 		
 		//Results of this batch
-		printf("Batch: %d\n", current_batch);
-		print_batch(&results[current_batch]);
+		//print_batch(&results[current_batch]);
 		
 		//Check if batches are enough
 		if ( current_batch >= MinBatches-1 ) {
