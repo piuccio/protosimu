@@ -11,9 +11,9 @@
 #define ContentRate 0.5
 #define MinLife 50
 #define MaxLife 90
-#define CacheSize 150
+#define CacheSize 30
 #define NumPeers 50
-#define NumPublish 1
+#define NumPublish 2
 #define NumSearch 4
 #define SearchTimeOut 10
 #define MaxRelay 2
@@ -29,6 +29,8 @@
 #define WarmUpReference 10 /* Chek with the last x samples */
 #define RatioBatchWarmUp 10 /* Ratio between the length of the WarmUp and that of a batch */
 #define TargetConfidenceInterval 0.05 /* 5% of the avgNumContent */ 
+
+//#define WRITETOFILE 1
 
 typedef struct parameters_set Parameters;
 
@@ -336,6 +338,15 @@ void local_search(int peer) {
 		return;
 	}
 	
+	//Relay the search
+	if ( MaxRelay <= 0 ) {
+		//If i don't want to relay this search is failed
+		total_search++;
+		failed_search++;
+		schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), peer, NULL);
+		return;
+	}
+	
 	//Generate a search record
 	Record* search = new_record();
 	search->key = next_search;
@@ -345,14 +356,6 @@ void local_search(int peer) {
 	// Store the pending search
 	in_list(&searches, search);
 	
-	//Relay the search
-	if ( MaxRelay <= 0 ) {
-		//If i don't want to relay this search is failed
-		total_search++;
-		failed_search++;
-		schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), peer, NULL);
-		return;
-	}
 	int i=0, next_peer;
 	Random_Peers rnd;
 	rnd.peer = peer;
@@ -475,6 +478,7 @@ void end_search(int peer, Parameters* par) {
 		schedule(END_DOWNLOAD, current_time + negexp(DownloadTime, &seme1), peer, par);
 	} else {
 		//Search is still considered good
+		total_down++;
 		failed_down++;
 		//schedule a new one
 		schedule(LOCAL_SEARCH, current_time + negexp(SearchInterval, &seme1), peer, NULL);
@@ -811,12 +815,14 @@ int main()
 	init_variables();
 	
 	//Write occupancy to a file
+	#ifdef WRITETOFILE
 	f=fopen("/tmp/avgNumContent.dat", "w");
 	if (f == NULL) {
 		fprintf(stderr, "Error opening the file");
 		return 1;
 	}
 	fprintf(f,"#Average Number of content in the local memory over the time\n0 0\n");
+	#endif
 
 	for (i=0 ; i<NumPeers ; i++){
 		/* Schedule the first GENERATION and SEARCH for all the peers in the system */
@@ -850,12 +856,16 @@ int main()
 		relativeVariation = fabs( (warmup.avgNumContent-avgSample)/warmup.avgNumContent );
 		
 		//Write to file the current sample
+		#ifdef WRITETOFILE
 		fprintf(f,"%.0f %f\n", current_time, warmup.avgNumContent);
+		#endif
 		
 		//Iterate
 		i = (i+1)%WarmUpReference;
 		
 	} while (relativeVariation > WarmUpTolerance );  //Stop if averages doesn't much too much
+	//} while (current_time < 1500);
+	//return 0;
 	
 	//Here the warmup ends
 	warmup_time = current_time;
@@ -879,7 +889,9 @@ int main()
 			batch_result(&results[current_batch], current_time - start_current_batch);
 			
 			//Write to file
+			#ifdef WRITETOFILE
 			fprintf(f,"%.0f %f\n", current_time, results[current_batch].avgNumContent);
+			#endif
 		}
 		
 		//Results of this batch
@@ -911,6 +923,8 @@ int main()
 	//print_batch(&squaredSum);
 	printf("Confidence interval on NumContent: %f\n", confidence_width);
 	printf("End of simulation!");
+	#ifdef WRITETOFILE
 	fclose(f);
+	#endif
 return 0;
 }
