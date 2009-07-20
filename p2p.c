@@ -6,7 +6,13 @@
 #include "simtime.h"
 #include "math.h"
 
+#define TRUNCATED
+#define IDGEN
 
+#define T_MEAN 500
+
+#define GEN_NAME "/tmp/generation.txt"
+#define SEARCH_NAME "/tmp/search.txt"
 #define MaxID 1000
 #define ContentRate 0.5
 #define MinLife 50
@@ -14,7 +20,7 @@
 #define CacheSize 30
 #define NumPeers 50
 #define NumPublish 2
-#define NumSearch 4
+#define NumSearch 3
 #define SearchTimeOut 10
 #define MaxRelay 2
 #define MinContactTime 0.1
@@ -47,6 +53,7 @@ struct parameters_set
 enum {GENERATION, REMOVAL, PUBLISH, LOCAL_SEARCH, RELAY_SEARCH, END_SEARCH, TIMEOUT_SEARCH, END_DOWNLOAD};
 typedef enum {FALSE, TRUE} boolean;
 
+
 long seme1 = 14123451;
 Event *event_list = NULL;
 int num_content[NumPeers]; // Counter for the peer memory
@@ -57,6 +64,15 @@ int cache_counter[NumPeers]; // Counter for the announcement cache
 int next_search; //globally unique ID of the next search
 
 Record *searches=NULL; //Structure for the search objects
+
+FILE *gen_file, *search_file; //File to save peer and id  
+int generated[MaxID], search[MaxID];
+#ifdef TRUNCATED
+	char type[]="TRUNCATED GEOMETRIC";
+#else
+    char type[]="UNIFORM"; 
+#endif
+
 
 /* Statistics */
 //probability that a search fails
@@ -118,6 +134,7 @@ Time current_time;
 
 extern double negexp(double,long *);
 extern double uniform(double , double , long *);
+extern int geometric_trunc1(double ,int ,long *);
 
 void schedule(int type, Time time, int peer, Parameters * rec)
 {
@@ -223,7 +240,20 @@ void generation(int peer){
 	// Check if some memory is still available
 	if (num_content[peer] < MaxID) {
 		do {
-			ID = uniform(0, MaxID, &seme1);
+		// Decide if content is generated according to either uniform or truncated geometric preocedure
+		    #ifdef TRUNCATED
+		    do {
+			    ID = geometric_trunc1(T_MEAN,MaxID+1,&seme1) - 1;
+		    } while ( ID >= MaxID );
+			if (ID >= MaxID) printf("Oh cazzo\n");
+			
+			#else
+				ID = uniform(0, MaxID, &seme1);
+			#endif
+			generated[ID]++;
+			//printf("%d ", ID);
+			//fprintf(gen_file,"%d %d\n",peer, ID);
+		
 		} while (memory[peer][ID]); 
 		  
 		// Now I can store the content in the memory
@@ -302,8 +332,17 @@ void publish(Parameters *par, int peer){
 
 void local_search(int peer) {
 	//What am I looking for ?
-	int wanted_ID = uniform(0, MaxID, &seme1);
-	
+	int wanted_ID;
+	// Decide if content is generated according to either uniform or truncated geometric preocedure
+		    #ifdef TRUNCATED
+			    do {
+			  	  wanted_ID = geometric_trunc1(T_MEAN,MaxID+1,&seme1) - 1;
+		   		} while ( wanted_ID >= MaxID );
+			#else
+				wanted_ID = uniform(0, MaxID, &seme1);
+			#endif
+    //fprintf(search_file,"%d %d\n",peer, wanted_ID);	
+    search[wanted_ID]++;	
 	//Should the search succeed ?
 	started_search++;
 	if ( global_memory[wanted_ID] > 0 ) {
@@ -478,6 +517,7 @@ void end_search(int peer, Parameters* par) {
 		schedule(END_DOWNLOAD, current_time + negexp(DownloadTime, &seme1), peer, par);
 	} else {
 		//Search is still considered good
+		//printf("download failed after end of search at peer %d for %d\n", peer, par->content_ID);
 		total_down++;
 		failed_down++;
 		//schedule a new one
@@ -607,6 +647,8 @@ void init_variables(void) {
 	failed_down=0;
 	total_down=0;
 	for (i=0; i<MaxID; i++) {
+		generated[i] = 0;
+	    search[i] = 0; 
 		histo_content[i]=0.0;
 	}
 	area_global_memory=0.0;
@@ -808,11 +850,48 @@ void average_batches(int Max) {
 	}
 }
 
+
+void print_confidence(Result *ss, Result *avg, int num) {
+	// width = 2 * t_0.005 * s / sqrt(n)
+	printf("Avg number of content in memory: %f%%\n", 200.0*tstudent[num]*sqrt(ss->avgNumContent/num)/sqrt(num+1)/avg->avgNumContent );
+	printf("Prob. search fails %f%%\n", 200.0*tstudent[num]*sqrt(ss->searchFail/num)/sqrt(num+1)/avg->searchFail );
+		//printf("\tProb. content doesn't exist: %f%%\n", res->notExisting );
+	printf("Prob. download fails %f%%\n", 200.0*tstudent[num]*sqrt(ss->downloadFail/num)/sqrt(num+1)/avg->downloadFail );
+	printf("Avg copies of the same content: %f%%\n", 200.0*tstudent[num]*sqrt(ss->avgCopies/num)/sqrt(num+1)/avg->avgCopies );
+	printf("Avg downloads in the time unit (in the system): %f%%\n", 200.0*tstudent[num]*sqrt(ss->downloadRate/num)/sqrt(num+1)/avg->downloadRate );
+		//printf("\tAvg download rate (per peer): %f\n", res->downloadRate/NumPeers );
+	printf("Avg time to complete a search: %f%%\n", 200.0*tstudent[num]*sqrt(ss->avgSearchTime/num)/sqrt(num+1)/avg->avgSearchTime );
+		//printf("\tAvg time for a relayed search: %f\n",  2.0*tstudent[num]*sqrt(ss->downloadFail/num)/sqrt(num+1)avgRelayTime );
+	printf("Prob. that a content is not in the system: %f%%\n", 200.0*tstudent[num]*sqrt(ss->notInSystem/num)/sqrt(num+1)/avg->notInSystem );
+	printf("\n\n");
+}
+
+
 int main()
 {
 	int i,j;
 	//Variables initialization
 	init_variables();
+	
+	
+	#ifdef IDGEN 
+	// Open savefile
+	gen_file = fopen(GEN_NAME,"w");
+	if (gen_file == NULL) {
+		fprintf(stderr, "Error opening the file");
+		return 1;
+	}
+	fprintf(gen_file,"#Generation phase 'ID' 'Number of times'\n");
+	fprintf(gen_file,"#Number of ID: %d, Mean: %d, distribution type: %s\n", MaxID, T_MEAN, type );
+	
+	search_file = fopen(SEARCH_NAME,"w");
+	if (search_file == NULL) {
+		fprintf(stderr, "Error opening the file");
+		return 1;
+	}
+	fprintf(search_file,"#Search phase 'PEER' Number of times'\n");
+	fprintf(search_file,"#Number of ID: %d, Mean: %d, distribution type: %s\n", MaxID, T_MEAN, type );
+	#endif
 	
 	//Write occupancy to a file
 	#ifdef WRITETOFILE
@@ -919,10 +998,22 @@ int main()
 	average_batches(current_batch);
 	printf("\nAverage Batch\n");
 	print_batch(&avgBatch);
-	//printf("Squared Sum\n");
-	//print_batch(&squaredSum);
+	printf("SConfidence\n");
+	print_confidence(&squaredSum, &avgBatch, current_batch);
 	printf("Confidence interval on NumContent: %f\n", confidence_width);
 	printf("End of simulation!");
+	
+	#ifdef IDGEN 
+	int index;
+	for (index = 0; index < MaxID; index++){
+		fprintf(gen_file,"%d %d\n", index, generated[index]);
+		fprintf(search_file,"%d %d\n", index, search[index]);
+	}
+	fclose(search_file);
+	fclose(gen_file);
+	
+	#endif
+	
 	#ifdef WRITETOFILE
 	fclose(f);
 	#endif
